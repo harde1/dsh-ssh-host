@@ -101,3 +101,21 @@ export function buildConnectCommand(user, host, port) {
 export function parseSshdProbeResult(outcome) {
   return outcome === 'connect'
 }
+
+// sshd 探测。生产路径是真实 TCP connect(127.0.0.1:22);测试经 setSshdProberForTests
+// 注入假探测,避免测试套件真的去连本机 22 端口(仓库约定全部离线)。生产代码不调用注入点。
+let sshdProber = null
+export function setSshdProberForTests(fn) { sshdProber = fn }
+export async function checkSshd(host = '127.0.0.1', port = SSHD_PORT, timeoutMs = 1500) {
+  if (sshdProber) return sshdProber(host, port)
+  const net = await import('node:net')
+  return new Promise((resolve) => {
+    const socket = net.connect({ host, port })
+    let done = false
+    const finish = (up) => { if (!done) { done = true; socket.destroy(); resolve(up) } }
+    socket.setTimeout(timeoutMs)
+    socket.once('connect', () => finish(true))
+    socket.once('timeout', () => finish(false))
+    socket.once('error', () => finish(false))
+  })
+}

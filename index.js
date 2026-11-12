@@ -13,12 +13,14 @@ import { createServer } from 'node:http'
 import { readFileSync, mkdirSync, writeFileSync, rmSync, existsSync, rmdirSync, statSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { userInfo as osUserInfo, homedir } from 'node:os'
 
 import { createClient, ApiError } from './natfrp.mjs'
 import { createFrpcManager } from './frpc.mjs'
 import { createPasswordGate, createGateServer } from './gate.mjs'
 import { installFrpc, checkInstalled, fetchClients, pickAsset, extractSakuraVersion, compareFrpcVersion } from './installer.mjs'
 import { resolveDshHome, resolveFrpcPath, displayPath } from './paths.mjs'
+import { checkSshd, generateHostKey, fingerprintOf as sshFingerprintOf, installPublicKey, buildConnectCommand, SSHD_PORT } from './ssh.mjs'
 
 export const name = 'sshhost'
 export const inject = ['credentials', 'webServer', 'timer', 'connection']
@@ -185,6 +187,16 @@ export function apply(ctx, config = {}) {
    */
   let enabled = typeof state.enabled === 'boolean' ? state.enabled : config.enabled === true
   let tunnelId = String(state.tunnelId ?? config.tunnelId ?? '').trim()
+  // SSH 隧道 ID:与 DSH 隧道并存,同一 frpc 进程承载(NATFRP_TARGET 多值)。
+  let sshTunnelId = String(state.sshTunnelId ?? '').trim()
+  // 私钥注入目录:默认真实 ~/.ssh;测试可经 DSH_SSH_DIR 指到临时目录。
+  const sshDir = String(process.env.DSH_SSH_DIR ?? '').trim() || join(homedir(), '.ssh')
+  // 已生成的密钥从盘上恢复(私钥/公钥两个文件,均 0600),重启后 /key/private 仍可用。
+  let hostKey = null
+  try {
+    const pk = safeRead(join(DATA_DIR, 'ssh-host-key'))
+    if (pk) hostKey = { privateKey: pk, publicKey: safeRead(join(DATA_DIR, 'ssh-host-key.pub')) }
+  } catch { /* 读不到就当没有 */ }
 
   /**
    * 本机端口。
@@ -446,7 +458,10 @@ export function apply(ctx, config = {}) {
         logError(`natfrp: 访问密钥为空（tokenFile=${cfg.tokenFile || '未配置'}, tokenRef=${cfg.tokenRef}）`)
         return
       }
-      if (!tunnelId) {
+      // SSH 与 DSH 两条隧道同一 frpc 进程承载(NATFRP_TARGET 逗号多值):
+      // frpc 支持多隧道;SSH 隧道 local_port=22 直连 sshd,不过网关。
+      const targetIds = [...new Set([tunnelId, sshTunnelId].filter(Boolean))]
+      if (!targetIds.length) {
         logError('natfrp: 未配置隧道 ID')
         return
       }
@@ -456,13 +471,13 @@ export function apply(ctx, config = {}) {
         if (report.error) logWarn(`natfrp: 隧道端口检查失败: ${JSON.stringify(report)}`)
         frpc.note(`隧道端口: ${JSON.stringify(report)}`)
       }
-      const r = frpc.start({ tunnelIds: [tunnelId] })
+      const r = frpc.start({ tunnelIds: targetIds })
       if (!r.ok) {
         logWarn(`natfrp: frpc 启动失败: ${r.reason}${r.detail ? ` (${r.detail})` : ''}`)
         frpc.note(`frpc 启动失败: ${r.reason}`)
       } else {
-        logInfo(`natfrp: frpc 已启动 (pid=${r.pid}${reason ? `, ${reason}` : ''})`)
-        frpc.note(`frpc 已启动 (pid=${r.pid}${reason ? `, ${reason}` : ''})`)
+        logInfo(`natfrp: frpc 已启动 (pid=${r.pid}, tunnels=${targetIds.length}${reason ? `, ${reason}` : ''})`)
+        frpc.note(`frpc 已启动 (pid=${r.pid}, tunnels=${targetIds.length}${reason ? `, ${reason}` : ''})`)
       }
     } catch (e) {
       const msg = String(e?.message ?? e)
@@ -784,6 +799,9 @@ export function apply(ctx, config = {}) {
       version: PLUGIN_VERSION,
       enabled,
       tunnelId,
+      // SSH 隧道 ID 只是轻量字符串;快照不放 sshdUp —— 那是一次异步 TCP connect,
+      // 快照 4s 被轮询一次,前端单独按自己的节奏打 /ssh/state。
+      sshTunnelId,
       gatePort: actualGatePort ?? gatePort,
       gateRunning: Boolean(gateServer?.listening),
       gatePasswordConfigured: Boolean(gatePassword),
@@ -1506,6 +1524,179 @@ export function apply(ctx, config = {}) {
       })()
 
       json(res, 202, { started: true, path: cfg.frpcPath })
+      return true
+    }
+
+    // ---------- SSH 主机 ----------
+
+    if (path === '/ssh-host/api/ssh/state' && req.method === 'GET') {
+      const [sshdUp] = await Promise.all([checkSshd()])
+      let tunnel = null
+      if (sshTunnelId) {
+        try {
+          const token = await resolveToken()
+          const api = apiOrNull(token)
+          if (api) {
+            const [list, nodes] = await Promise.all([
+              api.tunnels(),
+              api.nodes().catch(() => ({})),
+            ])
+            noteApiOk()
+            const tn = (Array.isArray(list) ? list : []).find((t) => String(t.id) === sshTunnelId)
+            if (tn) {
+              const nodeHost = nodes?.[tn.node]?.host ?? ''
+              const remote = Number(tn.remote) || null
+              tunnel = {
+                id: tn.id,
+                online: tn.online === true,
+                remote,
+                nodeHost,
+                node: tn.node,
+              }
+            }
+          }
+        } catch { /* 拉不到就如实显示「未连」 */ }
+      }
+      const user = osUserInfo().username
+      json(res, 200, {
+        platform: process.platform,
+        sshdUp,
+        key: hostKey ? { fingerprint: sshFingerprintOf(hostKey.publicKey), hasPrivate: true } : null,
+        sshTunnelId,
+        tunnel,
+        user,
+        connectCmd: tunnel?.remote && tunnel?.nodeHost
+          ? buildConnectCommand(user, tunnel.nodeHost, tunnel.remote)
+          : null,
+      })
+      return true
+    }
+
+    if (path === '/ssh-host/api/ssh/key/create' && req.method === 'POST') {
+      try {
+        const gen = generateHostKey()
+        mkdirSync(DATA_DIR, { recursive: true })
+        writeFileSync(join(DATA_DIR, 'ssh-host-key'), gen.privateKey, { mode: 0o600 })
+        writeFileSync(join(DATA_DIR, 'ssh-host-key.pub'), `${gen.publicKey}\n`, { mode: 0o600 })
+        hostKey = gen
+        // upsert 契约(见 ssh.mjs):created=新写入 / replaced=标记行被新公钥替换 /
+        // unchanged=同一把公钥已在。前端 Task 10 用 action 区分文案。
+        const inst = installPublicKey(gen.publicKey, { sshDir })
+        logInfo(`natfrp: SSH 公钥${inst.action === 'created' ? '已写入' : inst.action === 'replaced' ? '已替换(旧公钥行已更新)' : '无变化'} ${inst.file}`)
+        json(res, 200, {
+          ok: true,
+          action: inst.action,
+          file: inst.file,
+          fingerprint: sshFingerprintOf(gen.publicKey),
+        })
+      } catch (e) {
+        json(res, 500, { error: 'ssh-key-failed', message: String(e?.message ?? e) })
+      }
+      return true
+    }
+
+    if (path === '/ssh-host/api/ssh/key/private' && req.method === 'GET') {
+      if (!hostKey) {
+        json(res, 404, { error: 'no-key', message: '还没有生成密钥' })
+        return true
+      }
+      json(res, 200, {
+        privateKey: hostKey.privateKey,
+        publicKey: hostKey.publicKey,
+        fingerprint: sshFingerprintOf(hostKey.publicKey),
+      })
+      return true
+    }
+
+    if (path === '/ssh-host/api/ssh/tunnel/create' && req.method === 'POST') {
+      if (process.platform !== 'darwin') {
+        json(res, 400, { error: 'unsupported-platform', message: 'SSH 主机功能第一阶段仅支持 macOS' })
+        return true
+      }
+      if (!(await checkSshd())) {
+        json(res, 409, {
+          error: 'sshd-down',
+          message: '本机 sshd(远程登录)没有开启:系统设置 → 通用 → 共享 → 远程登录,打开后重试',
+        })
+        return true
+      }
+      if (sshTunnelId) {
+        json(res, 409, { error: 'already-created', message: `已有 SSH 隧道 ${sshTunnelId},先删除再建` })
+        return true
+      }
+      const token = await resolveToken()
+      const api = apiOrNull(token)
+      if (!api) { json(res, 400, { error: 'no-token' }); return true }
+      const raw = await readBody(req)
+      let body = {}
+      try { body = JSON.parse(raw || '{}') } catch { /* 空 body 允许 */ }
+      // 节点:显式传 > 当前 DSH 隧道的节点(同节点,延迟一致)> 都没有就报错
+      let node = Number(body.node) || null
+      if (!node && lastTunnelInfo) node = Number(lastTunnelInfo.node) || null
+      if (!node || !Number.isInteger(node) || node <= 0) {
+        json(res, 400, {
+          error: 'no-node',
+          message: '没有可用节点:先在上方选一条隧道(SSH 会复用它的节点),或显式传 node',
+        })
+        return true
+      }
+      try {
+        const created = await api.tunnelCreate({
+          name: String(body.name ?? 'SSH').trim().slice(0, 24) || 'SSH',
+          type: 'tcp',
+          node,
+          local_ip: '127.0.0.1',
+          local_port: SSHD_PORT,
+          note: '由 dsh-ssh-host 创建',
+        })
+        const id = created?.id
+        if (!id) {
+          json(res, 502, { error: 'api-failed', message: '官方返回成功但没给隧道 ID' })
+          return true
+        }
+        sshTunnelId = String(id)
+        writeState({ sshTunnelId })
+        logInfo(`natfrp: SSH 隧道已创建 ${id} (node=${node}, local=127.0.0.1:${SSHD_PORT})`)
+        if (enabled) { frpc.stop(); void startAll('ssh tunnel created') }
+        json(res, 200, {
+          ok: true,
+          id,
+          remote: created?.remote ?? null,
+          warning: created?.important_warning_for_ai ?? null,
+        })
+      } catch (e) {
+        const msg = e instanceof ApiError ? e.message : String(e?.message ?? e)
+        logWarn(`natfrp: SSH 隧道创建失败: ${msg}`)
+        json(res, 502, { error: 'api-failed', message: msg })
+      }
+      return true
+    }
+
+    if (path === '/ssh-host/api/ssh/tunnel/remove' && req.method === 'POST') {
+      if (!sshTunnelId) { json(res, 400, { error: 'no-tunnel', message: '没有 SSH 隧道可删' }); return true }
+      const token = await resolveToken()
+      const api = apiOrNull(token)
+      if (!api) { json(res, 400, { error: 'no-token' }); return true }
+      const idNum = Number(sshTunnelId)
+      try {
+        const r = await api.tunnelDelete([idNum])
+        noteApiOk()
+        const deleted = (Array.isArray(r?.deleted) ? r.deleted : []).map(Number)
+        // 与上游 tunnel/delete 同语义:failed 只是「没把在线 frpc 踢下线」,
+        // deleted 才算真删了;本地必须停 frpc 重启,否则它拿着死隧道反复重连。
+        if (!deleted.includes(idNum)) {
+          json(res, 502, { error: 'delete-failed', message: '官方没有删掉这条隧道(可能已不存在或不属于当前账号)' })
+          return true
+        }
+        sshTunnelId = ''
+        writeState({ sshTunnelId: '' })
+        frpc.stop()
+        if (enabled) void startAll('ssh tunnel removed')
+        json(res, 200, { ok: true })
+      } catch (e) {
+        const msg = e instanceof ApiError ? e.message : String(e?.message ?? e)
+        json(res, 502, { error: 'api-failed', message: msg })
+      }
       return true
     }
 
