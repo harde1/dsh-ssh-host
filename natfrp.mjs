@@ -26,7 +26,7 @@ export class ApiError extends Error {
 export function createClient(token, opts = {}) {
   const timeoutMs = Number(opts.timeoutMs) || 12000
   const version = String(opts.version || DEFAULT_UA_VERSION)
-  const UA = `dsh-sakurafrp/${version} (DeepSeek Harness plugin)`
+  const UA = `dsh-ssh-host/${version} (DeepSeek Harness plugin)`
   const log = opts.log ?? (() => {})
 
   async function call(method, path, { query, form } = {}) {

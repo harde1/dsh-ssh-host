@@ -22,10 +22,10 @@ import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto'
 // ---------------- polyfill ----------------
 
 export const POLYFILL_HTML = [
-  `<script data-natfrp-polyfill="1">!function(){try{if(self.crypto&&!self.crypto.randomUUID){self.crypto.randomUUID=function(){var b=new Uint8Array(16);self.crypto.getRandomValues(b);b[6]=b[6]&15|64;b[8]=b[8]&63|128;var h="";for(var i=0;i<16;i++){var x=b[i].toString(16);h+=(x.length<2?"0":"")+x;if(i===3||i===5||i===7||i===9)h+="-";}return h;}}}catch(e){}}();</script>`,
-  `<script data-natfrp-polyfill="2">!function(){try{if(typeof AbortSignal!=='undefined'&&typeof AbortSignal.any!=='function'){AbortSignal.any=function(signals){var c=new AbortController();var arr=Array.prototype.slice.call(signals||[]);function done(){try{c.abort()}catch(e){}}for(var i=0;i<arr.length;i++){var s=arr[i];if(!s)continue;if(s.aborted){done();break;}try{s.addEventListener('abort',done,{once:true});}catch(e){}}return c.signal;};}}catch(e){}}();</script>`,
+  `<script data-sshhost-polyfill="1">!function(){try{if(self.crypto&&!self.crypto.randomUUID){self.crypto.randomUUID=function(){var b=new Uint8Array(16);self.crypto.getRandomValues(b);b[6]=b[6]&15|64;b[8]=b[8]&63|128;var h="";for(var i=0;i<16;i++){var x=b[i].toString(16);h+=(x.length<2?"0":"")+x;if(i===3||i===5||i===7||i===9)h+="-";}return h;}}}catch(e){}}();</script>`,
+  `<script data-sshhost-polyfill="2">!function(){try{if(typeof AbortSignal!=='undefined'&&typeof AbortSignal.any!=='function'){AbortSignal.any=function(signals){var c=new AbortController();var arr=Array.prototype.slice.call(signals||[]);function done(){try{c.abort()}catch(e){}}for(var i=0;i<arr.length;i++){var s=arr[i];if(!s)continue;if(s.aborted){done();break;}try{s.addEventListener('abort',done,{once:true});}catch(e){}}return c.signal;};}}catch(e){}}();</script>`,
   /* 窄视口点按命中率：勾选框/单选框放大到 24px 的可点区域。 */
-  `<style data-natfrp-touch="1">@media (max-width:768px){input[type=checkbox],input[type=radio]{min-width:24px;min-height:24px;width:24px;height:24px;flex:none}}</style>`,
+  `<style data-sshhost-touch="1">@media (max-width:768px){input[type=checkbox],input[type=radio]{min-width:24px;min-height:24px;width:24px;height:24px;flex:none}}</style>`,
   /*
    * 修复「手机（或桌面版网站）白屏、只显示桌宠」—— 2026-11-05 真机 Edge 157 实测根因：
    *
@@ -45,7 +45,7 @@ export const POLYFILL_HTML = [
    * 移除后 gridCols 从 "980px 0px 0px" 恢复为 "56px 924px 0px"），
    * 并监听样式重插以保持幂等。只动这一条选择器命中的规则，插件其余样式原样保留。
    */
-  `<script data-natfrp-gridfix="1">!function(){
+  `<script data-sshhost-gridfix="1">!function(){
   function fix(){
     var removed=0;
     var sheets=Array.from(document.styleSheets||[]);
@@ -240,7 +240,7 @@ code{background:#10131b;border:1px solid #2c3345;border-radius:5px;padding:1px 6
  * cookie 为 HMAC(密码, 进程随机钥)——改密码或进程重启即失效。
  */
 export function createPasswordGate({ getPassword, maxFailures = 5, lockMs = 60_000, log = () => {} } = {}) {
-  const COOKIE = 'natfrp_gate'
+  const COOKIE = 'sshhost_gate'
   const MAX_AGE = 60 * 60 * 24 * 30
   const sessionKey = randomBytes(16).toString('hex')
   const failures = new Map()
@@ -485,7 +485,7 @@ export function createGateServer({
    *
    *    所以补与不补由网关自己的短命 cookie 记录，进可自愈、退不循环。
    */
-  const TOKEN_MARK = 'natfrp_tok'
+  const TOKEN_MARK = 'sshhost_tok'
   const TOKEN_MARK_MAX_AGE = 600
 
   /** 该请求是否已经由本网关补发过 launchToken。 */
@@ -590,7 +590,7 @@ a.btn{display:inline-block;margin-top:6px;padding:10px 16px;background:#5b7cfa;c
    * 处理：清掉所有 dsh-auth-* 与补发标记，303 回原地址 → 下一轮重新补 token。
    * 自愈只允许一次，否则端口/凭据真坏时会变成另一种重定向循环。
    */
-  const HEAL_COOKIE = 'natfrp_heal'
+  const HEAL_COOKIE = 'sshhost_heal'
 
   function healCount(cookieHeader) {
     const v = parseCookies(cookieHeader)[HEAL_COOKIE]
@@ -698,7 +698,7 @@ a.btn{display:inline-block;margin-top:6px;padding:10px 16px;background:#5b7cfa;c
         if (wantInject && status === 401 && !hasTokenMark(req.headers.cookie)) {
           const healed = healCount(req.headers.cookie)
           if (healed < 1) {
-            const clears = ['natfrp_heal=' + (healed + 1) + '; Path=/; Max-Age=60; HttpOnly; SameSite=Lax']
+            const clears = ['sshhost_heal=' + (healed + 1) + '; Path=/; Max-Age=60; HttpOnly; SameSite=Lax']
               .concat(clearDshAuthCookies(req.headers.cookie))
             res.writeHead(303, {
               location: req.url === '/' ? './' : req.url,

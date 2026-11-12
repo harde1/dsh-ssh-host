@@ -111,7 +111,7 @@ export function dshHomeSource(configured, env = process.env) {
  * frpc 二进制、state.json、token 都放这里：权限天然正确、卸载即清净、
  * 不在 node_modules 里（npm 升级不会冲掉）。
  */
-export const PLUGIN_DATA_DIR_NAME = 'dsh-sakurafrp'
+export const PLUGIN_DATA_DIR_NAME = 'dsh-ssh-host'
 
 /** 旧版放 frpc 的位置（~/.dsh/bin），保留读取兼容 */
 export const LEGACY_BIN_DIR_NAME = 'bin'
@@ -121,7 +121,7 @@ export const LEGACY_BIN_DIR_NAME = 'bin'
  *
  * 顺序：
  *   1. config.frpcPath                        用户显式指定，最高优先
- *   2. <home>/dsh-sakurafrp/frpc-standalone   插件私有目录（新默认）
+ *   2. <home>/dsh-ssh-host/frpc-standalone    插件私有目录（新默认）
  *   3. <home>/bin/frpc-standalone             旧位置，若已存在则沿用（兼容老用户）
  *
  * 为什么写和读分开：新装写第 2 项；但如果用户机器上第 3 项已有可用二进制，

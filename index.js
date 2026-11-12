@@ -1,8 +1,8 @@
-// dsh-sakurafrp — 宿主半侧。
+// dsh-ssh-host — 宿主半侧。
 //
 // 数据流：
 //   公网 → frpc(-f 语义, env 鉴权) → 127.0.0.1:<gatePort>(本插件网关)
-//            ├─ /natfrp/* 管理路由
+//            ├─ /ssh-host/* 管理路由
 //            ├─ 密码门（HMAC cookie / ?gate=）
 //            └─ Host 围栏反代 + WS 透传 → 127.0.0.1:<dshPort>(DSH WebServer)
 //
@@ -20,7 +20,7 @@ import { createPasswordGate, createGateServer } from './gate.mjs'
 import { installFrpc, checkInstalled, fetchClients, pickAsset, extractSakuraVersion, compareFrpcVersion } from './installer.mjs'
 import { resolveDshHome, resolveFrpcPath, displayPath } from './paths.mjs'
 
-export const name = 'natfrp'
+export const name = 'sshhost'
 export const inject = ['credentials', 'webServer', 'timer', 'connection']
 
 /**
@@ -42,32 +42,36 @@ const PLUGIN_VERSION = (() => {
 // ⚠️ 同样不能直接用 process.env.DSH_HOME：空白串会让 join 出相对路径，
 //    状态文件就落到当前工作目录里了。统一走 resolveDshHome。
 const DSH_HOME = resolveDshHome()
-// 目录名与包名一致（dsh-sakurafrp）。旧版用 dsh-natfrp，下面做一次性迁移。
-const DATA_DIR = join(DSH_HOME, 'dsh-sakurafrp')
-const LEGACY_DATA_DIR = join(DSH_HOME, 'dsh-natfrp')
+// 目录名与包名一致（dsh-ssh-host）。历史迁移链：最早的 dsh-natfrp → dsh-sakurafrp
+// → 现在的 dsh-ssh-host，下面按迁移表逐级尝试。
+const DATA_DIR = join(DSH_HOME, 'dsh-ssh-host')
+const LEGACY_DATA_DIRS = [join(DSH_HOME, 'dsh-natfrp'), join(DSH_HOME, 'dsh-sakurafrp')]
 const STATE_PATH = join(DATA_DIR, 'state.json')
 const PASSWORD_FILE = join(DATA_DIR, 'gate-password.txt')
 
 /**
- * 一次性迁移旧状态目录（包名从 dsh-natfrp 改为 dsh-sakurafrp）。
+ * 一次性迁移旧状态目录（迁移链：dsh-natfrp → dsh-sakurafrp → dsh-ssh-host）。
  *
  * ⚠️ 用「复制」而不是 rename：旧包可能仍被安装着，rename 会把它的状态目录搬走，
  *    让它下一轮读不到 state.json 与网关密码。
- * 只在「新目录没有 state.json、旧目录有」时动作；失败静默（退化为首次使用）。
+ * 每一级都只在「新目录没有 state.json」时动作；失败静默（退化为首次使用）。
+ * 文件清单含 token.txt：上游 2.3.2+ 的 FALLBACK_TOKEN_FILE 也落在数据目录里。
  */
 function migrateLegacyDataDir() {
   try {
     if (existsSync(STATE_PATH)) return // 新位置已有状态，不覆盖
-    if (!existsSync(LEGACY_DATA_DIR)) return
     let copied = 0
     mkdirSync(DATA_DIR, { recursive: true })
-    for (const file of ['state.json', 'gate-password.txt']) {
-      const from = join(LEGACY_DATA_DIR, file)
-      if (!existsSync(from)) continue
-      try {
-        writeFileSync(join(DATA_DIR, file), readFileSync(from), { mode: 0o600 })
-        copied += 1
-      } catch { /* 单文件失败不影响其它 */ }
+    for (const LEGACY_DATA_DIR of LEGACY_DATA_DIRS) {
+      if (!existsSync(LEGACY_DATA_DIR)) continue
+      for (const file of ['state.json', 'gate-password.txt', 'token.txt']) {
+        const from = join(LEGACY_DATA_DIR, file)
+        if (!existsSync(from)) continue
+        try {
+          writeFileSync(join(DATA_DIR, file), readFileSync(from), { mode: 0o600 })
+          copied += 1
+        } catch { /* 单文件失败不影响其它 */ }
+      }
     }
     if (copied === 0) {
       try { rmdirSync(DATA_DIR) } catch { /* 不留空目录，避免下次误判已迁移 */ }
@@ -78,11 +82,11 @@ migrateLegacyDataDir()
 
 /**
  * 是否属于本插件的管理路由。
- * 用「/natfrp 或 /natfrp/...」精确匹配，避免 /natfrpfoo 之类被误当成管理路由
+ * 用「/ssh-host 或 /ssh-host/...」精确匹配，避免 /ssh-hostfoo 之类被误当成管理路由
  * （网关与 handleOwnRoutes 必须用同一套判定，否则会出现"一边拦一边放"）。
  */
 function isAdminPath(u) {
-  return /^\/natfrp(?:[/?#]|$)/.test(String(u ?? ''))
+  return /^\/ssh-host(?:[/?#]|$)/.test(String(u ?? ''))
 }
 
 function safeRead(p) {
@@ -506,11 +510,11 @@ export function apply(ctx, config = {}) {
           /**
            * ⚠️ 绝不能用 remoteAddress 判断「是不是本机」。
            *   公网流量是 frpc 从 127.0.0.1 转发进来的，公网访客与本机浏览器的
-           *   来源地址完全一样 —— 按来源放行等于把 /natfrp/api/config 敞开给
+           *   来源地址完全一样 —— 按来源放行等于把 /ssh-host/api/config 敞开给
            *   整个互联网（对方可以先改掉访问密码，再登录拿到完整 DSH）。
            *   唯一的身份凭据只有密码门 cookie；没有就走 gate.handle（登录页 / 401）。
            *
-           *   本机设置页不受影响：它打的是 DSH webServer 上的 /natfrp 路由
+           *   本机设置页不受影响：它打的是 DSH webServer 上的 /ssh-host 路由
            *   （见文件末尾 webServer.register），根本不经过这个网关。
            */
           if (!gate.checkCookie(req)) return gate.handle(req, res)
@@ -664,7 +668,7 @@ export function apply(ctx, config = {}) {
     }
   }
 
-  // ---------- 管理路由（/natfrp/*，双挂：网关 + DSH webServer） ----------
+  // ---------- 管理路由（/ssh-host/*，双挂：网关 + DSH webServer） ----------
 
   function readBody(req, limit = 16384) {
     return new Promise((resolve) => {
@@ -709,7 +713,7 @@ export function apply(ctx, config = {}) {
   // 而快照每 4 秒被拉一次。改为命中缓存，只在以下时机刷新：
   //   · 插件启动时
   //   · 安装完成后
-  //   · 前端显式请求 /natfrp/api/frpc/check
+  //   · 前端显式请求 /ssh-host/api/frpc/check
   let frpcPresence = { present: false }
   let installProgress = null // { phase, received, total } 或 null
   let installing = false
@@ -795,7 +799,7 @@ export function apply(ctx, config = {}) {
       apiError: apiErrorView || undefined,
       // 绝对化的日志地址：桌面端内置浏览器/外部浏览器都无法解析相对路径，
       // 客户端拿不到 webServer 服务，所以必须由服务端按实际请求来源拼出来。
-      logsUrl: `${originBase}/natfrp/api/logs`,
+      logsUrl: `${originBase}/ssh-host/api/logs`,
       // 一键安装 frpc 的状态（缓存，避免每次快照都 spawn 子进程探版本）
       frpcInstall: {
         path: cfg.frpcPath,
@@ -890,25 +894,25 @@ export function apply(ctx, config = {}) {
     }
   }
 
-  /** 处理 /natfrp 前缀；返回 true = 已接管。 */
+  /** 处理 /ssh-host 前缀；返回 true = 已接管。 */
   async function handleOwnRoutes(req, res) {
     let url
     try { url = new URL(req.url ?? '/', 'http://127.0.0.1') } catch { return false }
     const path = url.pathname.replace(/\/+$/, '')
     if (!isAdminPath(path)) return false
 
-    if (path === '/natfrp/api/state' && req.method === 'GET') {
+    if (path === '/ssh-host/api/state' && req.method === 'GET') {
       json(res, 200, await snapshot(originOf(req)))
       return true
     }
 
-    if (path === '/natfrp/api/logs' && req.method === 'GET') {
+    if (path === '/ssh-host/api/logs' && req.method === 'GET') {
       res.writeHead(200, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' })
       res.end(frpc.logs().join('\n') || '(暂无日志)')
       return true
     }
 
-    if (path === '/natfrp/api/tunnels' && req.method === 'GET') {
+    if (path === '/ssh-host/api/tunnels' && req.method === 'GET') {
       const token = await resolveToken()
       const api = apiOrNull(token)
       if (!api) { json(res, 400, { error: 'no-token' }); return true }
@@ -943,7 +947,7 @@ export function apply(ctx, config = {}) {
      * 负载来自 /node/stats（官方只在那里给 load 百分比），
      * 拉不到就整列 load = -1，界面显示「未知」，不影响选节点。
      */
-    if (path === '/natfrp/api/nodes' && req.method === 'GET') {
+    if (path === '/ssh-host/api/nodes' && req.method === 'GET') {
       const token = await resolveToken()
       const api = apiOrNull(token)
       if (!api) { json(res, 400, { error: 'no-token' }); return true }
@@ -995,7 +999,7 @@ export function apply(ctx, config = {}) {
     }
 
     /** 端口可用性检测：界面填端口时就给出结论，别等保存后才报错。 */
-    if (path === '/natfrp/api/port/check' && req.method === 'GET') {
+    if (path === '/ssh-host/api/port/check' && req.method === 'GET') {
       let raw = ''
       try { raw = new URLSearchParams(String(req.url ?? '').split('?')[1] ?? '').get('port') ?? '' } catch { /* noop */ }
       const p = Number(raw)
@@ -1017,7 +1021,7 @@ export function apply(ctx, config = {}) {
      * 不建 HTTP(S) —— 那要求用户先有域名并配好 CNAME 解析，新手必然卡在这一步；
      * 想要域名/证书可以之后在管理面板补「子域绑定」。
      */
-    if (path === '/natfrp/api/tunnel/create' && req.method === 'POST') {
+    if (path === '/ssh-host/api/tunnel/create' && req.method === 'POST') {
       const token = await resolveToken()
       const api = apiOrNull(token)
       if (!api) { json(res, 400, { error: 'no-token' }); return true }
@@ -1097,7 +1101,7 @@ export function apply(ctx, config = {}) {
           node,
           local_ip: '127.0.0.1',
           local_port: gatePort,
-          note: '由 dsh-sakurafrp 创建',
+          note: '由 dsh-ssh-host 创建',
           extra,
         }
         let created
@@ -1162,7 +1166,7 @@ export function apply(ctx, config = {}) {
      * 因此顺序是：先删远端，成功后才停 frpc、清 tunnelId、把开关落到关闭。
      * 远端失败时本地什么都不动，用户还能重试。
      */
-    if (path === '/natfrp/api/tunnel/delete' && req.method === 'POST') {
+    if (path === '/ssh-host/api/tunnel/delete' && req.method === 'POST') {
       const token = await resolveToken()
       const api = apiOrNull(token)
       if (!api) { json(res, 400, { error: 'no-token' }); return true }
@@ -1221,7 +1225,7 @@ export function apply(ctx, config = {}) {
       return true
     }
 
-    if (path === '/natfrp/api/user' && req.method === 'GET') {
+    if (path === '/ssh-host/api/user' && req.method === 'GET') {
       const token = await resolveToken()
       const api = apiOrNull(token)
       if (!api) { json(res, 400, { error: 'no-token' }); return true }
@@ -1246,7 +1250,7 @@ export function apply(ctx, config = {}) {
       return true
     }
 
-    if (path === '/natfrp/api/start' && req.method === 'POST') {
+    if (path === '/ssh-host/api/start' && req.method === 'POST') {
       enabled = true
       // ⚠️ 不把 gatePassword 写进 state.json：该文件常被备份 / 同步 / 其它插件读取，
       //    密码只落 gate-password.txt（0600）。
@@ -1256,7 +1260,7 @@ export function apply(ctx, config = {}) {
       return true
     }
 
-    if (path === '/natfrp/api/stop' && req.method === 'POST') {
+    if (path === '/ssh-host/api/stop' && req.method === 'POST') {
       enabled = false
       frpc.stop()
       // ⚠️ 不把 gatePassword 写进 state.json：该文件常被备份 / 同步 / 其它插件读取，
@@ -1269,7 +1273,7 @@ export function apply(ctx, config = {}) {
 
     // ---------- frpc 检测 / 一键安装 ----------
 
-    if (path === '/natfrp/api/frpc/check' && req.method === 'GET') {
+    if (path === '/ssh-host/api/frpc/check' && req.method === 'GET') {
       json(res, 200, { path: cfg.frpcPath, ...(await refreshFrpcPresence()) })
       return true
     }
@@ -1284,7 +1288,7 @@ export function apply(ctx, config = {}) {
      * 节流：60s 内最多一次真实请求；窗口内重复点击返回 429 + retryAfter，
      * 前端显示「不要频繁检查更新」。
      */
-    if (path === '/natfrp/api/frpc/update-check' && req.method === 'GET') {
+    if (path === '/ssh-host/api/frpc/update-check' && req.method === 'GET') {
       const now = Date.now()
       const since = now - updateCheck.lastAt
       if (updateCheck.inflight) {
@@ -1383,7 +1387,7 @@ export function apply(ctx, config = {}) {
     }
 
     // 叉掉提示：记住「这个问题已被忽略」，问题类型或路径变化后会自动重新出现
-    if (path === '/natfrp/api/frpc/dismiss' && req.method === 'POST') {
+    if (path === '/ssh-host/api/frpc/dismiss' && req.method === 'POST') {
       const kind = currentProblemKind()
       dismiss({ kind })
       json(res, 200, { dismissed: true, kind, fingerprints: dismissedFingerprints })
@@ -1391,7 +1395,7 @@ export function apply(ctx, config = {}) {
     }
 
     // 取消忽略（设置页「恢复提示」用，也方便用户改主意）
-    if (path === '/natfrp/api/frpc/undismiss' && req.method === 'POST') {
+    if (path === '/ssh-host/api/frpc/undismiss' && req.method === 'POST') {
       undismissAll()
       json(res, 200, { dismissed: false, fingerprints: [] })
       return true
@@ -1399,7 +1403,7 @@ export function apply(ctx, config = {}) {
 
     // 确认「安装成功」提示：落盘后本次及以后都不再显示，
     // 直到 frpc 再次出问题并重新安装成功（产生新的 at）才会重新出现。
-    if (path === '/natfrp/api/frpc/ack-result' && req.method === 'POST') {
+    if (path === '/ssh-host/api/frpc/ack-result' && req.method === 'POST') {
       let at = Number(installResult?.at) || 0
       try {
         const raw = await readBody(req, 4096)
@@ -1411,7 +1415,7 @@ export function apply(ctx, config = {}) {
       return true
     }
 
-    if (path === '/natfrp/api/frpc/install' && req.method === 'POST') {
+    if (path === '/ssh-host/api/frpc/install' && req.method === 'POST') {
       if (installing) {
         json(res, 409, { error: 'busy', message: '已有安装任务在进行中' })
         return true
@@ -1505,7 +1509,7 @@ export function apply(ctx, config = {}) {
       return true
     }
 
-    if (path === '/natfrp/api/align' && req.method === 'POST') {
+    if (path === '/ssh-host/api/align' && req.method === 'POST') {
       const token = await resolveToken()
       const api = apiOrNull(token)
       if (!api) { json(res, 400, { error: 'no-token' }); return true }
@@ -1515,7 +1519,7 @@ export function apply(ctx, config = {}) {
       return true
     }
 
-    if (path === '/natfrp/api/config' && req.method === 'POST') {
+    if (path === '/ssh-host/api/config' && req.method === 'POST') {
       const body = await readBody(req)
       let patch
       try { patch = JSON.parse(body || '{}') } catch { json(res, 400, { error: 'invalid-json' }); return true }
@@ -1700,13 +1704,13 @@ export function apply(ctx, config = {}) {
       return true
     }
 
-    // 首页（浏览器直接开 /natfrp）；尾部斜杠已被 path 归一化处理
-    if (path === '/natfrp') {
+    // 首页（浏览器直接开 /ssh-host）；尾部斜杠已被 path 归一化处理
+    if (path === '/ssh-host') {
       const s = await snapshot(originOf(req))
       res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' })
       res.end(`<!doctype html><meta charset="utf-8"><title>natfrp</title>
 <pre>${JSON.stringify(s, null, 2)}</pre>
-<p><a href="/natfrp/api/logs">frpc 日志</a> · <a href="/natfrp/api/tunnels">隧道列表</a> · <a href="/natfrp/api/user">账号信息</a></p>`)
+<p><a href="/ssh-host/api/logs">frpc 日志</a> · <a href="/ssh-host/api/tunnels">隧道列表</a> · <a href="/ssh-host/api/user">账号信息</a></p>`)
       return true
     }
 
@@ -1719,7 +1723,7 @@ export function apply(ctx, config = {}) {
   ctx.effect(() => {
     const dispose = ctx.webServer?.register?.({
       kind: 'prefix',
-      path: '/natfrp',
+      path: '/ssh-host',
       handler: async (req, res) => {
         try {
           const handled = await handleOwnRoutes(req, res)

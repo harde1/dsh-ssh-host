@@ -1,9 +1,9 @@
 {
-  "name": "dsh-sakurafrp",
+  "name": "dsh-ssh-host",
   "version": "2.4.0",
   "type": "module",
   "main": "index.js",
-  "description": "DeepSeek Harness 内建的内网穿透面板：托管 SakuraFrp frpc，隧道列表 / 端口自动同步 / 流量统计 / 公网密码门。",
+  "description": "DeepSeek Harness 插件:本机作为 SSH 主机,经 SakuraFrp 隧道供远方手机端 SSH 控制;另保留 DSH 界面的公网穿透与密码门。",
   "exports": {
     ".": "./index.js",
     "./client": "./client.js",
