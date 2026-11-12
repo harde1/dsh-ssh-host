@@ -1869,6 +1869,11 @@ window.__ModuleLoader__.load({
             err ? h('span', { style: S.err }, err) : null,
             !err && pollErr ? h('span', { style: S.err }, pollErr) : null),
 
+        h('div', { style: S.divider }),
+
+        // ── SSH 远程访问(四态渐进解锁,独立 8s 轮询)──
+        h(SshPanel),
+
         // ── 日志 ──
         // 不再单独加分割线：按钮本身就是边界，多一条线多占一行高度
         // ⚠️ 日志现在默认展开且每 2s 刷新，所以必须限高：frpc 跑久了能写几千行，
@@ -2099,6 +2104,189 @@ body[data-sshhost-mode="narrow"] button[aria-label="SSH 主机"] > .sshhost-swit
       if (node.dataset.busy === 'true') return
       const want = enabled ? 'true' : 'false'
       if (node.dataset.on !== want) node.dataset.on = want
+    }
+
+    // ── SSH 远程访问区块 ──
+    //
+    // 渐进解锁四态(与上方「密钥 → 隧道 → 端口 → 密码」四步同风格):
+    //   非macOS → sshd 未开(指引+深链)→ 无密钥(一键生成)→ 无 SSH 隧道(一键建)→ 就绪(连接命令)
+    // 上一态没解锁,下一态就不渲染 —— 免得把四件事一次性糊在用户脸上。
+    //
+    // 轮询节奏:这里独立 8s 拉 /ssh/state。面板主体的 4s 快照轮询不做 TCP 探测,
+    // sshd 探测(真连一次 127.0.0.1:22)的开销只由这条更慢的轮询承担。
+    function SshPanel() {
+      const [ssh, setSsh] = useState(null)
+      const [busy, setBusy] = useState('')
+      const [msg, setMsg] = useState('')
+      const [showPriv, setShowPriv] = useState(false)
+      const [privKey, setPrivKey] = useState('')
+      const mounted = useRef(true)
+
+      useEffect(() => {
+        mounted.current = true
+        const load = async () => {
+          try {
+            const s = await getJSON('/ssh/state')
+            if (mounted.current) setSsh(s)
+          } catch { /* 拉不到就保持上一份快照,不闪错误条 */ }
+        }
+        void load()
+        const t = setInterval(() => void load(), 8000)
+        return () => { mounted.current = false; clearInterval(t) }
+      }, [])
+
+      if (!ssh) return null   // 首次加载不占位,避免闪一块空卡
+
+      const isMac = ssh.platform === 'darwin'
+
+      // 生成结果按服务端 action 三态区分(不是布尔 added):
+      //   created   新密钥新条目;unchanged 同一把钥匙已在;
+      //   replaced  旧条目被换掉 —— 必须提醒手机端重新导入新私钥,否则 SSH 连不上。
+      const KEY_MSG = {
+        created: '✓ 密钥已生成,公钥已写入 authorized_keys',
+        unchanged: '✓ 密钥已存在,无需重复生成',
+        replaced: '✓ 密钥已重新生成:新公钥已替换旧条目,手机端需重新导入新私钥',
+      }
+
+      const createKey = async () => {
+        setBusy('key'); setMsg('')
+        try {
+          const r = await post('/ssh/key/create')
+          setMsg(KEY_MSG[r.action] ?? `✓ 密钥已就绪(${r.action ?? '未知结果'})`)
+        } catch (e) { setMsg(`密钥生成失败:${e.message}`) }
+        finally { setBusy('') }
+      }
+
+      const createTunnel = async () => {
+        setBusy('tunnel'); setMsg('')
+        try {
+          const r = await post('/ssh/tunnel/create', {})
+          setMsg(r.warning ? `⚠ ${r.warning}` : '✓ SSH 隧道已创建,等 frpc 重连后生效')
+        } catch (e) { setMsg(`创建失败:${e.message}`) }
+        finally { setBusy('') }
+      }
+
+      const removeTunnel = async () => {
+        const ok = typeof window === 'undefined' || window.confirm('删除 SSH 隧道后手机将无法 SSH 连入,确定删除?')
+        if (!ok) return
+        setBusy('remove'); setMsg('')
+        try {
+          await post('/ssh/tunnel/remove')
+          setMsg('✓ SSH 隧道已删除')
+        } catch (e) { setMsg(`删除失败:${e.message}`) }
+        finally { setBusy('') }
+      }
+
+      const revealPrivate = async () => {
+        // 已拉到过就只做展开/收起,不重复打接口(私钥内容不会自己变)
+        if (privKey) { setShowPriv((v) => !v); return }
+        setBusy('priv')
+        try {
+          const r = await getJSON('/ssh/key/private')
+          setPrivKey(r.privateKey)
+          setShowPriv(true)
+        } catch (e) { setMsg(`读取私钥失败:${e.message}`) }
+        finally { setBusy('') }
+      }
+
+      // 态判定(按解锁顺序短路;sshdUp 是服务端真 TCP 探测的结果)
+      const platformBlock = !isMac
+      const sshdBlock = isMac && !ssh.sshdUp
+      const keyBlock = ssh.sshdUp && !ssh.key
+      const tunnelBlock = ssh.key && !ssh.sshTunnelId
+
+      return h('div', { style: { ...S.field, gridTemplateColumns: '1fr', gap: '8px' } },
+        h('div', { style: { ...S.row, gap: '10px' } },
+          h('div', { style: S.label }, 'SSH 远程访问'),
+          ssh.key
+            ? h('span', {
+              style: S.code, title: '手机端导入私钥后可比对这串指纹',
+            }, ssh.key.fingerprint)
+            : null),
+
+        platformBlock
+          ? h('div', { style: S.hint },
+            'SSH 主机功能当前阶段仅支持 macOS(需要系统 sshd)。Windows 的 OpenSSH Server 支持在路线图上。')
+          : null,
+
+        sshdBlock
+          ? h('div', { style: { display: 'flex', flexDirection: 'column', gap: '6px' } },
+            h('div', { style: S.warn },
+              '本机 sshd(远程登录)没有开启。到「系统设置 → 通用 → 共享 → 远程登录」打开,然后点重新检测。'),
+            h('div', {},
+              h('button', {
+                type: 'button', style: S.btnGhost,
+                onClick: () => {
+                  // 系统设置「共享」面板的深链;打不开就按上面的提示手点
+                  try { location.href = 'x-apple.systempreferences:com.apple.preferences.sharing?Services' }
+                  catch { /* noop */ }
+                },
+              }, '打开系统设置'),
+              ' ',
+              h('span', { style: S.hint }, '打开后等下一轮自动检测(≤8 秒),或重启设置页。')))
+          : null,
+
+        keyBlock
+          ? h('div', { style: { display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' } },
+            h('div', { style: { ...S.hint, flex: '1 1 240px' } },
+              '生成一把专用于 SSH 连入的密钥:公钥写进本机 ~/.ssh/authorized_keys,私钥导出到手机(Termius 等)。'),
+            h('button', {
+              type: 'button', style: busy === 'key' ? { ...S.btn, opacity: 0.6 } : S.btn,
+              disabled: busy === 'key', onClick: createKey,
+            }, busy === 'key' ? '生成中…' : '生成 SSH 密钥'))
+          : null,
+
+        tunnelBlock
+          ? h('div', { style: { display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' } },
+            h('div', { style: { ...S.hint, flex: '1 1 240px' } },
+              '建一条 TCP 隧道直连本机 22 端口(远程端口官方分配;SSH 流量不经过密码门,由 SSH 认证保护)。'),
+            h('button', {
+              type: 'button', style: busy === 'tunnel' ? { ...S.btn, opacity: 0.6 } : S.btn,
+              disabled: busy === 'tunnel', onClick: createTunnel,
+            }, busy === 'tunnel' ? '创建中…' : '创建 SSH 隧道'))
+          : null,
+
+        ssh.sshTunnelId && ssh.tunnel
+          ? h('div', { style: { display: 'flex', flexDirection: 'column', gap: '6px' } },
+            h('div', { style: { display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' } },
+              h('span', { style: S.badge(ssh.tunnel.online) },
+                ssh.tunnel.online ? 'SSH 隧道在线' : 'SSH 隧道未连'),
+              ssh.connectCmd
+                ? h('span', { style: { ...S.code, userSelect: 'all' } }, ssh.connectCmd)
+                : h('span', { style: S.hint }, '等隧道上线后显示连接命令(需要官方分配到远程端口)'),
+              h('button', {
+                type: 'button', style: S.btnGhost, disabled: busy === 'remove',
+                onClick: removeTunnel,
+              }, busy === 'remove' ? '删除中…' : '删除隧道')),
+            ssh.tunnel.remote && !ssh.tunnel.online
+              ? h('div', { style: S.warn },
+                '隧道建好了但还没连上:确认总开关已开、frpc 正在运行;若刚创建,等几秒自动重连。')
+              : null)
+          : null,
+
+        ssh.key
+          ? h('div', {},
+            h('button', {
+              type: 'button', style: { ...S.btnGhost, fontSize: '12px' },
+              onClick: revealPrivate,
+            }, showPriv ? '收起私钥' : '查看私钥(导入手机)'),
+            showPriv && privKey
+              ? h('pre', {
+                style: {
+                  marginTop: '6px', padding: '8px 10px', borderRadius: '6px',
+                  background: 'rgba(127,127,127,.08)', fontSize: '11px', lineHeight: 1.5,
+                  whiteSpace: 'pre-wrap', wordBreak: 'break-all', userSelect: 'all',
+                },
+              }, privKey)
+              : null,
+            showPriv && privKey
+              ? h('div', { style: { ...S.hint, marginTop: '4px' } },
+                '整段复制(含 BEGIN/END 行),在 Termius 里 Keychain → + → Import 保存,主机认证选这把钥匙。')
+              : null)
+          : null,
+
+        // 失败提示一律红,警告(⚠)也红,成功提示绿 —— 判断文案内容而不是另开一个 state
+        msg ? h('div', { style: /^⚠|失败/.test(msg) ? S.err : S.ok }, msg) : null)
     }
 
     function NatfrpSidebarIcon({ size }) {
