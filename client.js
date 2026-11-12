@@ -69,7 +69,7 @@ window.__ModuleLoader__.load({
       }
       if (!/^https?:|^file:|^mailto:/.test(target)) {
         // 仍不是绝对地址 —— 内置浏览器与外部浏览器都无法打开，明确放弃而不是静默失败
-        console.warn('[natfrp] 无法打开非绝对地址:', target)
+        console.warn('[sshhost] 无法打开非绝对地址:', target)
         return
       }
       try {
