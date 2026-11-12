@@ -5,12 +5,13 @@
 // 全部离线：密钥内存生成，authorized_keys 写进 mkdtemp 临时目录，不碰真实 ~/.ssh，
 // 不发起任何 TCP 连接（checkSshd 的真探测与注入点属 Task 9，随路由一起测）。
 //
-// 与计划 Step 8.1 的差异（逐条核对过）：
+// 与计划 Step 8.1 / Task 9 实施契约修正的差异（逐条核对过）：
 //   · 断言从裸 assert 换成套件统一的 rec 骨架，语义逐条保留；
-//   · 计划把「不同密钥再装一次」写进同一个已带 dsh-ssh-host 标记的目录，而实现是
-//     按标记整文件幂等（已有本插件条目 → 任何后续安装都不再写入），两者不可同时成立；
-//     该场景挪到「目录里已有用户自己的条目、无标记」的位置测（实现的文档注释承诺的
-//     「只追加不删改用户已有条目」正是这里），计划断言语义逐条保留。
+//   · 计划块 3 的偏移算术错误：wire 布局 `[4B len][11B type][4B len][32B raw]`，
+//     原始字节在偏移 19（非 15），已修测试并补长度字段断言；
+//   · installPublicKey 契约按 Task 9「实施契约修正」从标记级幂等升级为 upsert 三态
+//     （created / unchanged / replaced）——标记级幂等会让「重新生成密钥」时新公钥
+//     写不进 authorized_keys，SSH 认证静默失败；断言已按新契约改写。
 
 import { mkdtempSync, statSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -64,38 +65,54 @@ const markerLines = (text) => text.split('\n').filter((l) => l.includes('dsh-ssh
     blob.subarray(19).toString('hex').slice(0, 16) + '…')
 }
 
-// ── 4) installPublicKey：幂等 + 权限（sshd StrictModes 要求 0700/0600，否则公钥认证静默失效）──
+// ── 4) installPublicKey：upsert 三态 + 权限（sshd StrictModes 要求 0700/0600，否则公钥认证静默失效）──
+//    契约（Task 9 实施契约修正，硬性要求）：
+//      · 无标记条目 → 追加新公钥行，action=created
+//      · 有标记条目且公钥主体（base64）相同 → 不动文件，action=unchanged
+//      · 有标记条目且公钥主体不同 → 替换该标记行（旧私钥失效场景），action=replaced
+//      · 用户自己的其它条目（无标记）永远原样保留；写入后标记行恰好一条
 {
   const dir = mkdtempSync(join(tmpdir(), 'sshhost-'))
   const k = generateHostKey()
   const r1 = installPublicKey(k.publicKey, { sshDir: dir })
-  rec('第一次安装写入', r1.added === true, `added=${r1.added}`)
+  rec('无标记目录 → action=created（追加）', r1.action === 'created', `action=${r1.action}`)
+  const before = readFileSync(join(dir, 'authorized_keys'), 'utf8')
   const r2 = installPublicKey(k.publicKey, { sshDir: dir })
-  rec('第二次安装幂等不重写', r2.added === false, `added=${r2.added} reason=${r2.reason ?? ''}`)
+  rec('同目录同公钥二次安装 → action=unchanged', r2.action === 'unchanged', `action=${r2.action}`)
+  rec('unchanged 文件不变（字节级一致）', readFileSync(join(dir, 'authorized_keys'), 'utf8') === before)
+  const other = generateHostKey()
+  const r3 = installPublicKey(other.publicKey, { sshDir: dir })
+  rec('同目录不同公钥 → action=replaced', r3.action === 'replaced', `action=${r3.action}`)
+  const text = readFileSync(join(dir, 'authorized_keys'), 'utf8')
+  rec('旧公钥行被替换（旧主体不在文件里）', !text.includes(k.publicKey.split(' ')[1]))
+  rec('新公钥主体在文件里', text.includes(other.publicKey.split(' ')[1]))
+  rec('标记行恰好一条（替换而不是追加）', markerLines(text) === 1, `count=${markerLines(text)}`)
   const st = statSync(join(dir, 'authorized_keys'))
   rec('authorized_keys 权限 0600', (st.mode & 0o777) === 0o600, `mode=${(st.mode & 0o777).toString(8)}`)
   const stDir = statSync(dir)
   rec('ssh 目录权限 0700', (stDir.mode & 0o777) === 0o700, `mode=${(stDir.mode & 0o777).toString(8)}`)
-  const text = readFileSync(join(dir, 'authorized_keys'), 'utf8')
-  rec('标记 dsh-ssh-host 恰好出现一次（两次安装只落一行）', markerLines(text) === 1, `count=${markerLines(text)}`)
-  rec('第一条密钥行在文件里', text.includes(k.publicKey.split(' ')[1]))
 }
 
-// ── 4.5) installPublicKey 的 multi-key 场景 ──
-//    目录里已有用户自己的条目（无本插件标记）时，不同密钥仍可安装，只追加、不动已有行。
-//    计划 Step 8.1 原把这条断言写进已带标记的同一目录——与实现的按标记整文件幂等冲突
-//    （标记已在 → 后续安装一律 no-op，见 ssh.mjs installPublicKey），故挪到语义成立的位置。
+// ── 4.5) upsert 对用户已有条目的保护 ──
+//    目录里已有用户自己的条目（无本插件标记）时：created 只追加；
+//    replaced 只动标记行（含行内旧注释），用户行原样保留。
 {
   const dir = mkdtempSync(join(tmpdir(), 'sshhost-'))
   const preUser = 'ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQDfakeuserkey user@laptop'
   writeFileSync(join(dir, 'authorized_keys'), `${preUser}\n`, { mode: 0o600 })
+  const k = generateHostKey()
+  const r1 = installPublicKey(k.publicKey, { sshDir: dir })
+  rec('有用户条目、无标记 → action=created（只追加不覆盖）', r1.action === 'created', `action=${r1.action}`)
+  let text = readFileSync(join(dir, 'authorized_keys'), 'utf8')
+  rec('用户已有条目原样保留（created 后）', text.includes(preUser))
   const other = generateHostKey()
-  const r3 = installPublicKey(other.publicKey, { sshDir: dir })
-  rec('不同密钥仍可安装（multi-key 场景）', r3.added === true, `added=${r3.added}`)
-  const text = readFileSync(join(dir, 'authorized_keys'), 'utf8')
-  rec('第二条密钥行在文件里', text.includes(other.publicKey.split(' ')[1]))
-  rec('用户已有条目原样保留（只追加不删改）', text.includes(preUser))
-  rec('混合文件里标记也只出现一次', markerLines(text) === 1, `count=${markerLines(text)}`)
+  const r2 = installPublicKey(other.publicKey, { sshDir: dir })
+  rec('不同公钥再装 → action=replaced（替换标记行）', r2.action === 'replaced', `action=${r2.action}`)
+  text = readFileSync(join(dir, 'authorized_keys'), 'utf8')
+  rec('用户已有条目原样保留（replaced 后）', text.includes(preUser))
+  rec('旧的插件公钥被替换掉', !text.includes(k.publicKey.split(' ')[1]))
+  rec('新公钥主体在文件里', text.includes(other.publicKey.split(' ')[1]))
+  rec('混合文件里标记恰好一条', markerLines(text) === 1, `count=${markerLines(text)}`)
 }
 
 // ── 5) installPublicKey 拒绝非 ed25519 输入 ──
