@@ -1,0 +1,37 @@
+# 依赖与构建产物
+node_modules/
+dist/
+*.tgz
+
+# DSH 运行时数据（含访问密钥、网关密码，绝不能提交）
+# 注意：别写成 *token*，那会连 token-test.mjs 这类测试文件一起吞掉
+.dsh/
+state.json
+gate-password.txt
+token.txt
+token.json
+*.token
+
+# 日志与临时文件
+*.log
+logs/
+tmp/
+*.tmp
+
+# 编辑器 / 系统
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# 本地环境变量
+.env
+.env.*
+
+# 布局预览产物（preview-render.mjs 生成）
+.preview/
+.uninstall-backup/
+
+# 本地临时工作目录（图标 / 截图生成脚本的中间产物）
+.runtmp-*/

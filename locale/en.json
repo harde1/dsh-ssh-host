@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Tunnel (SakuraFrp)",
+    "description": "Managed SakuraFrp frpc: tunnel picker, automatic port sync, traffic stats, public password gate. Exposes this machine's DSH through a SakuraFrp tunnel, guarded by a password gate and a Host-fenced reverse proxy."
+  }
+}

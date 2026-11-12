@@ -1,0 +1,81 @@
+{
+  "name": "dsh-sakurafrp",
+  "version": "2.4.0",
+  "type": "module",
+  "main": "index.js",
+  "description": "DeepSeek Harness 内建的内网穿透面板：托管 SakuraFrp frpc，隧道列表 / 端口自动同步 / 流量统计 / 公网密码门。",
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg"
+  },
+  "files": [
+    "index.js",
+    "natfrp.mjs",
+    "frpc.mjs",
+    "gate.mjs",
+    "installer.mjs",
+    "paths.mjs",
+    "client.js",
+    "cordis.patch.yml",
+    "screenshots.json",
+    "locale/*.json",
+    "icon.svg",
+    "assets/*.png",
+    "test-all.mjs",
+    "test/*.mjs",
+    "preview-render.mjs"
+  ],
+  "engines": {
+    "node": ">=18.2"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": ">=4.0.1-rc.1 <4.0.1-0 || >=4.0.1-0 <4.0.5-0 || >=4.0.5-0 <4.0.6-0 || >=4.0.6-0 <5.0.0-0"
+  },
+  "peerDependenciesMeta": {
+    "@deepseek-ai/cordis": {
+      "optional": true
+    }
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": [
+        "@deepseek-ai/dsh-client-connection",
+        "@deepseek-ai/dsh-client-ui-layout",
+        "@deepseek-ai/dsh-client-locale"
+      ]
+    }
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/MentholTea/dsh-sakurafrp.git"
+  },
+  "homepage": "https://github.com/MentholTea/dsh-sakurafrp#readme",
+  "bugs": {
+    "url": "https://github.com/MentholTea/dsh-sakurafrp/issues"
+  },
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "cordis",
+    "sakurafrp",
+    "natfrp",
+    "frp",
+    "tunnel",
+    "reverse-proxy",
+    "内网穿透"
+  ],
+  "license": "MIT",
+  "author": "MentholTea",
+  "scripts": {
+    "test": "node test-all.mjs",
+    "preview": "node preview-render.mjs"
+  }
+}
