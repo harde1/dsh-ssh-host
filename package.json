@@ -1,6 +1,6 @@
 {
   "name": "dsh-ssh-host",
-  "version": "2.4.0",
+  "version": "0.1.0",
   "type": "module",
   "main": "index.js",
   "description": "DeepSeek Harness 插件:本机作为 SSH 主机,经 SakuraFrp 隧道供远方手机端 SSH 控制;另保留 DSH 界面的公网穿透与密码门。",
@@ -54,17 +54,19 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/MentholTea/dsh-sakurafrp.git"
+    "url": "git@github.com:harde1/dsh-ssh-host.git"
   },
-  "homepage": "https://github.com/MentholTea/dsh-sakurafrp#readme",
+  "homepage": "https://github.com/harde1/dsh-ssh-host#readme",
   "bugs": {
-    "url": "https://github.com/MentholTea/dsh-sakurafrp/issues"
+    "url": "https://github.com/harde1/dsh-ssh-host/issues"
   },
   "keywords": [
     "dsh",
     "dsh-plugin",
     "deepseek-harness",
     "cordis",
+    "ssh",
+    "ssh-host",
     "sakurafrp",
     "natfrp",
     "frp",
