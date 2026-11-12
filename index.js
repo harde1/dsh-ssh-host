@@ -90,6 +90,18 @@ function safeRead(p) {
   try { return readFileSync(p, 'utf8').trim() } catch { return '' }
 }
 
+/**
+ * 属主注记：仅当 stat 带数字 uid（POSIX）时提示属主 UID。
+ * Windows 的 statSync 结果没有 uid，直接拼模板会显示「属主 UID undefined」。
+ */
+function ownerNoteFor(stat) {
+  const uid = stat?.uid
+  return Number.isFinite(uid)
+    ? `（当前文件属主可能不是你的账号，属主 UID ${uid}）`
+    : ''
+}
+export { ownerNoteFor }
+
 function readState() {
   try { return JSON.parse(readFileSync(STATE_PATH, 'utf8')) ?? {} } catch { return {} }
 }
@@ -842,8 +854,7 @@ export function apply(ctx, config = {}) {
       // 进一步区分：目录可写吗？文件属主是谁？
       let ownerNote = ''
       try {
-        const st = statSync(path)
-        ownerNote = `（当前文件属主可能不是你的账号，属主 UID ${st.uid}）`
+        ownerNote = ownerNoteFor(statSync(path))
       } catch { /* 拿不到就算了 */ }
 
       return {

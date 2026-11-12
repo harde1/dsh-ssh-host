@@ -5,6 +5,9 @@
 //   VERIFY_DSH_PORT 上游假 DSH 端口（默认起一个内置假服务器）
 
 import { createServer, request as httpRequest } from 'node:http'
+import { mkdtempSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { createClient, ApiError, fmtBytes } from './../natfrp.mjs'
 import { createFrpcManager } from './../frpc.mjs'
 import { createPasswordGate, createGateServer } from './../gate.mjs'
@@ -46,6 +49,33 @@ function record(name, pass, detail = '') {
     String(c2.userAgent ?? '').includes('dsh-sakurafrp/9.9.9'),
     `UA=${c2.userAgent}`,
   )
+}
+
+// ---------- 1b. index.js ownerNoteFor（Windows 属主 UID 提示） ----------
+//
+// ownerNoteFor 是 index.js 的模块级纯函数。index.js 在模块加载时会读 DSH_HOME 并做
+// 旧目录迁移（test/apply-test.mjs 同款前置），所以这里先指向一次性临时目录再动态
+// import，不碰真实 DSH 数据。
+{
+  process.env.DSH_HOME = mkdtempSync(join(tmpdir(), 'dsh-verify-owner-'))
+  // 计划期望的红灯形态是「ownerNoteFor is not a function」：兜一层 try，让未导出/
+  // 缺失时也以干净 FAIL 呈现，而不是击穿整个套件。
+  const safe = (fn, ...args) => {
+    try { return fn(...args) } catch (e) { return `__THROWN__ ${e?.message ?? e}` }
+  }
+  const { ownerNoteFor } = await import('./../index.js')
+  // Windows 的 statSync 结果没有 uid 字段，旧实现直接拼进模板串，
+  // 用户会看到「属主 UID undefined」。
+  const withUid = safe(ownerNoteFor, { uid: 501 })
+  record(
+    'ownerNoteFor: 有 uid（POSIX）时提示属主 UID',
+    typeof withUid === 'string' && withUid.includes('501') && withUid.includes('属主'),
+    `note=${withUid}`,
+  )
+  const noUid = safe(ownerNoteFor, {})
+  record('ownerNoteFor: 缺 uid（Windows）→ 空串', noUid === '', `note=${JSON.stringify(noUid)}`)
+  const nulish = safe(ownerNoteFor, undefined)
+  record('ownerNoteFor: undefined stat → 空串', nulish === '', `note=${JSON.stringify(nulish)}`)
 }
 
 // ---------- 2. frpc.mjs 日志解析 ----------
