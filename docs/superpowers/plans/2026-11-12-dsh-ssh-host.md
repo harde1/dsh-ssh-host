@@ -645,9 +645,28 @@ git add ssh.mjs test/ssh-host-test.mjs test-all.mjs
 git commit -m "feat: ssh.mjs — sshd probe, ed25519 host key, idempotent authorized_keys install"
 ```
 
+**实施修正记录(Task 8 完成后回写,commit d9510e0)**:
+- 断言风格:仓库主导是 rec/results 骨架且 test-all.mjs 靠 `N/N passed` 行汇总,计划里的裸 assert 已搬进 rec 骨架(29 条语义不变,32 项落地)。
+- 套件注册:test-all.mjs 是 `readdirSync` + `*-test.mjs` 命名约定扫描,**文件名即注册**,test-all.mjs 零改动。
+- 计划块 3 的偏移算术错误:wire 布局 `[4B len][11B type][4B len][32B raw]`,原始字节在偏移 **19**(非 15),已修测试并补长度字段断言。
+- 计划块 4 的不可满足断言组(标记级幂等 + 多把插件密钥共存 + 标记恰好一次):改为在「目录已有用户自己的条目、无标记」场景验证只追加不删改语义。
+- `checkSshd` / `setSshdProberForTests` 按计划归属 Task 9 实现,Task 8 未提前。
+
 ---
 
 ### Task 9: index.js SSH 路由 + frpc 多隧道(TDD)
+
+**实施契约修正(Task 8 发现,Task 9 执行时生效)**:`installPublicKey` 的幂等契约从
+「标记级」升级为 **upsert 语义**——标记级幂等会让「重新生成密钥」时新公钥写不进
+authorized_keys,SSH 认证静默失败。新契约:
+
+- 无标记条目 → 追加新公钥行,返回 `{ file, action: 'created' }`
+- 有标记条目且公钥主体(base64)相同 → 不动文件,返回 `{ file, action: 'unchanged' }`
+- 有标记条目且公钥主体不同 → **替换**该标记行(旧私钥失效场景:泄露/换机),返回 `{ file, action: 'replaced' }`
+- 用户自己的其它条目(无标记)永远原样保留
+
+`generateHostKey()` 的公钥注释仍为 `dsh-ssh-host`(标记即身份)。Task 8 已写测试中
+受影响的断言同步改写(同标记不同公钥 → replaced;用户条目保留断言保留)。
 
 **Files:**
 - Modify: `index.js`(sshTunnelId 状态、startAll 目标拼接、5 个路由、snapshot 附 ssh 摘要)
