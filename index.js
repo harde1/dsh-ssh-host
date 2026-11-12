@@ -360,7 +360,10 @@ export function apply(ctx, config = {}) {
 
   function apiOrNull(token) {
     if (!token) return null
-    return createClient(token, { log: (m) => logWarn(`natfrp: api ${m}`) })
+    return createClient(token, {
+      version: PLUGIN_VERSION,
+      log: (m) => logWarn(`natfrp: api ${m}`),
+    })
   }
 
   /**

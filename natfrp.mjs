@@ -6,7 +6,9 @@
 //   写端点：全部 POST，application/x-www-form-urlencoded 或 JSON 均可（规范锚点复用）
 
 const BASE = 'https://api.natfrp.com/v4'
-const UA = 'dsh-sakurafrp/2.2.0 (DeepSeek Harness plugin)'
+// UA 版本默认 0.0.0：版本号必须由调用方（插件）传入，不许在这里写死 —— 上游曾
+// 硬编码 2.2.0，发版后被漏改，面板识别不出插件版本。
+const DEFAULT_UA_VERSION = '0.0.0'
 
 export class ApiError extends Error {
   constructor(code, msg, status) {
@@ -19,10 +21,12 @@ export class ApiError extends Error {
 
 /**
  * @param {string} token 访问密钥
- * @param {{timeoutMs?:number, log?:Function}} [opts]
+ * @param {{timeoutMs?:number, version?:string, log?:Function}} [opts]
  */
 export function createClient(token, opts = {}) {
   const timeoutMs = Number(opts.timeoutMs) || 12000
+  const version = String(opts.version || DEFAULT_UA_VERSION)
+  const UA = `dsh-sakurafrp/${version} (DeepSeek Harness plugin)`
   const log = opts.log ?? (() => {})
 
   async function call(method, path, { query, form } = {}) {
@@ -74,6 +78,8 @@ export function createClient(token, opts = {}) {
   }
 
   return {
+    /** 本次客户端实际使用的 User-Agent（供测试断言，不再写死版本号）。 */
+    userAgent: UA,
     /** 隧道列表：[{id,name,node,type,online,status,status_reason,note,extra,remote,local_ip,local_port,export}] */
     tunnels: () => call('GET', '/tunnels'),
     /** 用户信息：{id,name,avatar,speed,tunnels,realname,group,traffic:[本日消耗,总剩余],sign,...} */

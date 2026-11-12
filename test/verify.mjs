@@ -30,6 +30,22 @@ function record(name, pass, detail = '') {
     ['ApiError 可抛', (() => { try { throw new ApiError(403, 'x') } catch (e) { return e instanceof ApiError && e.code === 403 } })()],
   ]
   for (const [n, p] of checks) record(n, p)
+
+  // UA 版本：默认 0.0.0，传入 version 后随调用方版本走。
+  // 上游曾在 UA 硬编码 2.2.0（index.js 头注释记载过这类坑），锁死不再复发。
+  const c1 = createClient('t')
+  const ua1 = String(c1.userAgent ?? '')
+  record(
+    'UA: 默认 dsh-sakurafrp/0.0.0 且不锁旧硬编码版本',
+    ua1.includes('dsh-sakurafrp/0.0.0') && !ua1.includes('/2.2.0'),
+    `UA=${c1.userAgent}`,
+  )
+  const c2 = createClient('t', { version: '9.9.9' })
+  record(
+    'UA: 随 opts.version 走',
+    String(c2.userAgent ?? '').includes('dsh-sakurafrp/9.9.9'),
+    `UA=${c2.userAgent}`,
+  )
 }
 
 // ---------- 2. frpc.mjs 日志解析 ----------
