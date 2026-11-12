@@ -33,8 +33,8 @@ rec('snapshot 暴露 problemKind', /problemKind: currentProblemKind\(\)/.test(in
 rec('snapshot 暴露 dismissed', /dismissed: isDismissed\(\{ kind: currentProblemKind\(\) \}\)/.test(index))
 
 // ── 3) 路由 ──
-rec('有 dismiss 路由', /path === '\/natfrp\/api\/frpc\/dismiss' && req\.method === 'POST'/.test(index))
-rec('有 undismiss 路由', /path === '\/natfrp\/api\/frpc\/undismiss' && req\.method === 'POST'/.test(index))
+rec('有 dismiss 路由', /path === '\/ssh-host\/api\/frpc\/dismiss' && req\.method === 'POST'/.test(index))
+rec('有 undismiss 路由', /path === '\/ssh-host\/api\/frpc\/undismiss' && req\.method === 'POST'/.test(index))
 
 // ── 4) 前端 ──
 rec('前端读 dismissed', /presence\.dismissed === true/.test(client))

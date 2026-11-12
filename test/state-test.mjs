@@ -9,7 +9,7 @@ import { execFileSync } from 'node:child_process'
 
 const sandbox = mkdtempSync(join(tmpdir(), 'state-test-'))
 const oldDir = join(sandbox, 'dsh-natfrp')
-const newDir = join(sandbox, 'dsh-sakurafrp')
+const newDir = join(sandbox, 'dsh-ssh-host')
 
 // ── 造一份旧状态 ──
 mkdirSync(oldDir, { recursive: true })
@@ -27,7 +27,7 @@ const script = `
 import { existsSync, mkdirSync, readFileSync, writeFileSync, rmdirSync } from 'node:fs'
 import { join } from 'node:path'
 const DSH_HOME = ${JSON.stringify(sandbox)}
-const DATA_DIR = join(DSH_HOME, 'dsh-sakurafrp')
+const DATA_DIR = join(DSH_HOME, 'dsh-ssh-host')
 const LEGACY_DATA_DIR = join(DSH_HOME, 'dsh-natfrp')
 const STATE_PATH = join(DATA_DIR, 'state.json')
 

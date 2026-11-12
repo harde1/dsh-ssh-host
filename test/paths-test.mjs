@@ -131,10 +131,10 @@ rec('非字符串原样', expandTilde(null) === null)
   // 新装（两边都没有）→ 插件私有目录
   const r = resolveFrpcPath({ env: {}, platform: 'win32', exists: () => false })
   rec('新装默认指向插件目录',
-    r.path === join(DEFAULT_HOME, 'dsh-sakurafrp', 'frpc-standalone.exe'), r.path)
+    r.path === join(DEFAULT_HOME, 'dsh-ssh-host', 'frpc-standalone.exe'), r.path)
 }
 {
-  const target = join(DEFAULT_HOME, 'dsh-sakurafrp', 'frpc-standalone.exe')
+  const target = join(DEFAULT_HOME, 'dsh-ssh-host', 'frpc-standalone.exe')
   const r = resolveFrpcPath({ env: {}, platform: 'win32', exists: (p) => p === target })
   rec('插件目录有则优先它', r.path === target && r.source === 'plugin-data', r.source)
 }
@@ -144,7 +144,7 @@ rec('非字符串原样', expandTilde(null) === null)
   rec('旧位置有则兼容沿用', r.path === legacy && r.source === 'legacy-bin', r.source)
 }
 {
-  const plugin = join(DEFAULT_HOME, 'dsh-sakurafrp', 'frpc-standalone.exe')
+  const plugin = join(DEFAULT_HOME, 'dsh-ssh-host', 'frpc-standalone.exe')
   const legacy = join(DEFAULT_HOME, 'bin', 'frpc-standalone.exe')
   const r = resolveFrpcPath({ env: {}, platform: 'win32', exists: (p) => p === plugin || p === legacy })
   rec('两边都有时插件目录优先', r.path === plugin && r.source === 'plugin-data', r.source)
@@ -160,14 +160,14 @@ rec('非字符串原样', expandTilde(null) === null)
 {
   // 无配置无环境 → 默认
   const r = resolveFrpcPath({ env: {}, platform: 'win32', exists: () => false })
-  rec('默认: 插件私有目录', r.path === join(DEFAULT_HOME, 'dsh-sakurafrp', 'frpc-standalone.exe'), r.path)
+  rec('默认: 插件私有目录', r.path === join(DEFAULT_HOME, 'dsh-ssh-host', 'frpc-standalone.exe'), r.path)
   rec('来源标记为 default', r.source === 'default', r.source)
 }
 {
   // 有 $DSH_HOME → 跟随它
   const envHome = abs('D:\\portable-dsh', '/portable-dsh')
   const r = resolveFrpcPath({ env: { DSH_HOME: envHome }, platform: 'win32', exists: () => false })
-  rec('$DSH_HOME 下用其插件目录', r.path === join(resolve(envHome), 'dsh-sakurafrp', 'frpc-standalone.exe'), r.path)
+  rec('$DSH_HOME 下用其插件目录', r.path === join(resolve(envHome), 'dsh-ssh-host', 'frpc-standalone.exe'), r.path)
   rec('来源标记为 plugin-data', r.source === 'plugin-data', r.source)
 }
 {
@@ -202,7 +202,7 @@ rec('非字符串原样', expandTilde(null) === null)
 {
   // 空白 $DSH_HOME → 默认，不落 CWD
   const r = resolveFrpcPath({ env: { DSH_HOME: '  ' }, platform: 'win32', exists: () => false })
-  rec('空白 $DSH_HOME 时用插件目录', r.path === join(DEFAULT_HOME, 'dsh-sakurafrp', 'frpc-standalone.exe'), r.path)
+  rec('空白 $DSH_HOME 时用插件目录', r.path === join(DEFAULT_HOME, 'dsh-ssh-host', 'frpc-standalone.exe'), r.path)
   rec('空白环境下 source=default', r.source === 'default', r.source)
 }
 {

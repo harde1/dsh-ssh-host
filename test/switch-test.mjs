@@ -18,7 +18,7 @@ class El {
   getAttribute(k) { return this._attrs[k] }
   appendChild(c) { this.children.push(c); c.parent = this; return c }
   querySelector(sel) {
-    if (sel === '.natfrp-switch') return this.children.find((c) => c.className === 'natfrp-switch') || null
+    if (sel === '.sshhost-switch') return this.children.find((c) => c.className === 'sshhost-switch') || null
     return null
   }
   addEventListener(t, fn) { (this.listeners[t] ||= []).push(fn) }
@@ -30,7 +30,7 @@ class El {
 }
 
 const row = new El('button')
-row.setAttribute('aria-label', '内网穿透')
+row.setAttribute('aria-label', 'SSH 主机')
 const fakeDoc = {
   body: new El('body'),
   querySelector: () => row,
@@ -58,7 +58,7 @@ async function post(path) {
   return { enabled: path === '/start' }
 }
 
-const SWITCH_CLASS = 'natfrp-switch'
+const SWITCH_CLASS = 'sshhost-switch'
 function ensureSwitchNode(r) {
   let node = r.querySelector('.' + SWITCH_CLASS)
   if (node) return node

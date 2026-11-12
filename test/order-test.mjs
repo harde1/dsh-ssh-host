@@ -69,7 +69,7 @@ rec('满载节点在下拉里禁用', /value: String\(n\.id\), disabled: !can/.t
 rec('节点用原生 select（一行放得下几十个）', /h\('select', \{[\s\S]{0,400}?— 选择节点 —/.test(client))
 
 // ── 5) 端口：填完检测 + 双向同步 ──
-rec('后端有端口检测端点', /path === '\/natfrp\/api\/port\/check'/.test(index))
+rec('后端有端口检测端点', /path === '\/ssh-host\/api\/port\/check'/.test(index))
 rec('前端填完就查（onBlur 触发）', /onBlur: \(\) => void checkPort\(gatePort\)/.test(client))
 rec('查完给「可以用 / 被占用」的结论', /端口 \$\{n\} 可以用/.test(client) && /已被其它程序占用/.test(client))
 rec('服务端改端口前先试绑（绑不上不改）', /const free = await checkPortFree\(n\)/.test(index))
@@ -146,7 +146,7 @@ rec('删除走 POST /tunnel/delete 且只传 id',
 rec('删除的是当前隧道时提示公网访问已停止',
   /s\.wasCurrent[\s\S]{0,400}?公网访问已停止/.test(client))
 rec('后端路由校验 id 并调用官方 tunnelDelete',
-  /\/natfrp\/api\/tunnel\/delete[\s\S]{0,1200}?api\.tunnelDelete\(\[id\]\)/.test(index))
+  /\/ssh-host\/api\/tunnel\/delete[\s\S]{0,1200}?api\.tunnelDelete\(\[id\]\)/.test(index))
 rec('后端把 failed 当「已删但没踢下线」而不是删除失败',
   /failed 不是「删除失败」/.test(index))
 rec('删除当前隧道后清空 tunnelId 并关闭开关',

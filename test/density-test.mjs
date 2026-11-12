@@ -35,7 +35,7 @@ rec('四个带标签的字段都用单行版式', fieldUses >= 4, `${fieldUses} 
 const legacy = /h\('div', \{ style: S\.label \}, '① SakuraFrp 访问密钥'\)[\s\S]{0,120}?S\.hint/.test(client)
 rec('① 不再有「标题 + 说明」两层再跟输入框', !legacy)
 
-// 状态区：原来「内网穿透 / frpc 状态 / 本机端口」三行标题
+// 状态区：原来「SSH 主机 / frpc 状态 / 本机端口」三行标题
 rec('三个状态徽标并在一行', /S\.badge\(frpc\.running\)[\s\S]{0,220}?S\.badge\(st\.gateRunning\)/.test(client))
 // 分区标题行不再挂任何外链：「子域绑定」已删，「绑定教程」挪到域名提示句末
 rec('分区标题行不再挂域名链接', !/连接设置'\)[\s\S]{0,420}?子域绑定/.test(client))
@@ -57,7 +57,7 @@ const browser = BROWSERS.find((p) => existsSync(p))
 
 /** 渲染某个状态，返回面板内容的像素高度 */
 function measure(variant) {
-  const out = join(tmpdir(), `dsh-sakurafrp-density-${variant}.html`)
+  const out = join(tmpdir(), `dsh-ssh-host-density-${variant}.html`)
   execFileSync(process.execPath, [resolve(here, '..', 'preview-render.mjs'), out], {
     cwd: here,
     env: { ...process.env, PREVIEW_VARIANT: variant },

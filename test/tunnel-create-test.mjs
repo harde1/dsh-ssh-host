@@ -61,7 +61,7 @@ const jsonRes = (data, status = 200) =>
   new Response(JSON.stringify(data), { status, headers: { 'content-type': 'application/json' } })
 
 // ⚠️ 只拦 api.natfrp.com。测试自己也要用 fetch 打本地插件服务器，
-//    一刀切拦掉的话连 /natfrp/api/nodes 都取不到。
+//    一刀切拦掉的话连 /ssh-host/api/nodes 都取不到。
 const realFetch = globalThis.fetch
 globalThis.fetch = async (input, init = {}) => {
   const u = new URL(String(input))
@@ -137,12 +137,12 @@ const postJSON = async (p, body) => {
 }
 
 // ── 0) 默认关闭 ──
-const boot = await getJSON('/natfrp/api/state')
+const boot = await getJSON('/ssh-host/api/state')
 rec('没配 enabled 时默认是关的', boot.body?.enabled === false, `enabled=${boot.body?.enabled}`)
 rec('默认关闭时 frpc 不运行', boot.body?.frpc?.running !== true)
 
 // ── 1) 节点列表 ──
-const nodesRes = await getJSON('/natfrp/api/nodes')
+const nodesRes = await getJSON('/ssh-host/api/nodes')
 const list = nodesRes.body?.nodes ?? []
 rec('GET /nodes 返回 200', nodesRes.status === 200, `status=${nodesRes.status}`)
 rec('剔除了离线节点', !list.some((n) => n.name === '离线节点'))
@@ -163,7 +163,7 @@ rec('官方请求带 Bearer 认证', String(nodesCall?.headers?.authorization ??
 rec('节点负载来自 /node/stats', calls.some((c) => c.path === '/v4/node/stats'))
 
 // ── 2) 创建隧道：参数拼装 ──
-const created = await postJSON('/natfrp/api/tunnel/create', { name: 'DSH 面板', node: 2, port: NEW_PORT })
+const created = await postJSON('/ssh-host/api/tunnel/create', { name: 'DSH 面板', node: 2, port: NEW_PORT })
 rec('POST /tunnel/create 返回 200', created.status === 200, `status=${created.status} ${JSON.stringify(created.body)}`)
 rec('返回新隧道 id', created.body?.id === 90001, String(created.body?.id))
 rec('返回实际使用的端口', Number(created.body?.port) === NEW_PORT, String(created.body?.port))
@@ -182,17 +182,17 @@ rec('默认带 auto_https = auto', createCall?.body?.extra === 'auto_https = aut
 
 // ── 2b) 前端传 off 时就写 off；非法值退回 auto ──
 calls.length = 0
-await postJSON('/natfrp/api/tunnel/create', { name: 'X', node: 2, port: NEW_PORT, autoHttps: 'off' })
+await postJSON('/ssh-host/api/tunnel/create', { name: 'X', node: 2, port: NEW_PORT, autoHttps: 'off' })
 const offCall = calls.find((c) => c.path === '/v4/tunnels' && c.method === 'POST')
 rec('autoHttps=off → extra 写 off', offCall?.body?.extra === 'auto_https = off', String(offCall?.body?.extra))
 calls.length = 0
-await postJSON('/natfrp/api/tunnel/create', { name: 'X', node: 2, port: NEW_PORT, autoHttps: '乱写的' })
+await postJSON('/ssh-host/api/tunnel/create', { name: 'X', node: 2, port: NEW_PORT, autoHttps: '乱写的' })
 const junkCall = calls.find((c) => c.path === '/v4/tunnels' && c.method === 'POST')
 rec('非法 autoHttps 退回 auto', junkCall?.body?.extra === 'auto_https = auto', String(junkCall?.body?.extra))
 rec('响应里带 autoHttpsDropped（降级标记）', created.body?.autoHttpsDropped === false, String(created.body?.autoHttpsDropped))
 
 // ── 3) 建完本机端口也跟着变成那个数 ──
-const afterCreate = await getJSON('/natfrp/api/state')
+const afterCreate = await getJSON('/ssh-host/api/state')
 rec('本机端口同步成表单端口', Number(afterCreate.body?.gatePort) === NEW_PORT, String(afterCreate.body?.gatePort))
 
 // ── 4) 官方警告要透传 ──
@@ -204,7 +204,7 @@ rec('state 里的 tunnelId 变成新隧道', String(afterCreate.body?.tunnelId) 
 // ── 6) 改本机端口 → 面板里那条隧道跟着改（to-panel）──
 const ANOTHER = await freePort()
 calls.length = 0
-const changed = await postJSON('/natfrp/api/config', { gatePort: ANOTHER })
+const changed = await postJSON('/ssh-host/api/config', { gatePort: ANOTHER })
 rec('改端口成功', changed.status === 200, `status=${changed.status}`)
 const editCall = calls.find((c) => c.path === '/v4/tunnel/edit')
 rec('同步调用了 tunnel/edit', Boolean(editCall))
@@ -217,8 +217,8 @@ const busy3 = createServer()
 await new Promise((r) => busy3.listen(0, '127.0.0.1', r))
 const busyPort3 = busy3.address().port
 tunnelPort = busyPort3 // 假装面板里这条隧道连的是被占的那个端口
-await postJSON('/natfrp/api/config', { tunnelId: '0' }) // 先切走，才能触发「重新选中」
-const bounced = await postJSON('/natfrp/api/config', { tunnelId: '90001' })
+await postJSON('/ssh-host/api/config', { tunnelId: '0' }) // 先切走，才能触发「重新选中」
+const bounced = await postJSON('/ssh-host/api/config', { tunnelId: '90001' })
 rec('隧道端口被占时改面板而不是失败', bounced.body?.portSync?.direction === 'to-panel',
   JSON.stringify(bounced.body?.portSync))
 rec('被占时本机端口保持原值', Number(bounced.body?.gatePort) === ANOTHER, String(bounced.body?.gatePort))
@@ -228,46 +228,46 @@ await new Promise((r) => busy3.close(r))
 const busy = createServer()
 await new Promise((r) => busy.listen(0, '127.0.0.1', r))
 const busyPort = busy.address().port
-const busyRes = await getJSON(`/natfrp/api/port/check?port=${busyPort}`)
+const busyRes = await getJSON(`/ssh-host/api/port/check?port=${busyPort}`)
 rec('被占用的端口报占用', busyRes.body?.available === false && busyRes.body?.reason === 'occupied',
   JSON.stringify(busyRes.body))
 await new Promise((r) => busy.close(r))
 
 const okPort = await freePort()
-const okRes = await getJSON(`/natfrp/api/port/check?port=${okPort}`)
+const okRes = await getJSON(`/ssh-host/api/port/check?port=${okPort}`)
 rec('空闲端口报可用', okRes.body?.available === true, JSON.stringify(okRes.body))
 
-const selfRes = await getJSON(`/natfrp/api/port/check?port=${ANOTHER}`)
+const selfRes = await getJSON(`/ssh-host/api/port/check?port=${ANOTHER}`)
 rec('自己网关正听着的端口不算被占用', selfRes.body?.available === true, JSON.stringify(selfRes.body))
 
 // 占用时改端口必须被挡住，且不改现状
 const busy2 = createServer()
 await new Promise((r) => busy2.listen(0, '127.0.0.1', r))
 const busyPort2 = busy2.address().port
-const rejected = await postJSON('/natfrp/api/config', { gatePort: busyPort2 })
+const rejected = await postJSON('/ssh-host/api/config', { gatePort: busyPort2 })
 rec('端口被占用 → 409 而不是静默改坏', rejected.status === 409 && rejected.body?.error === 'port-in-use',
   `status=${rejected.status}`)
-const afterReject = await getJSON('/natfrp/api/state')
+const afterReject = await getJSON('/ssh-host/api/state')
 rec('被拒后端口保持原值', Number(afterReject.body?.gatePort) === ANOTHER, String(afterReject.body?.gatePort))
 await new Promise((r) => busy2.close(r))
 
 // ── 8) 参数不合法要挡住，而不是把脏数据发给官方 ──
 const before = calls.filter((c) => c.path === '/v4/tunnels' && c.method === 'POST').length
-const bad = await postJSON('/natfrp/api/tunnel/create', { name: 'x', node: 'abc' })
+const bad = await postJSON('/ssh-host/api/tunnel/create', { name: 'x', node: 'abc' })
 rec('node 非数字 → 400 bad-node', bad.status === 400 && bad.body?.error === 'bad-node', `status=${bad.status}`)
-const badPort = await postJSON('/natfrp/api/tunnel/create', { name: 'x', node: 2, port: 80 })
+const badPort = await postJSON('/ssh-host/api/tunnel/create', { name: 'x', node: 2, port: 80 })
 rec('端口 80 → 400 bad-port', badPort.status === 400 && badPort.body?.error === 'bad-port', `status=${badPort.status}`)
 const after = calls.filter((c) => c.path === '/v4/tunnels' && c.method === 'POST').length
 rec('参数不合法时不打官方接口', before === after, `${before} -> ${after}`)
 
 // ── 9) 空名字要有兜底 ──
 calls.length = 0
-await postJSON('/natfrp/api/tunnel/create', { name: '   ', node: 2 })
+await postJSON('/ssh-host/api/tunnel/create', { name: '   ', node: 2 })
 const fallback = calls.find((c) => c.path === '/v4/tunnels' && c.method === 'POST')
 rec('空名字回落到默认名', fallback?.body?.name === 'DSH', String(fallback?.body?.name))
 
 // ── 10) 清除访问密钥 ──
-const cleared = await postJSON('/natfrp/api/config', { clearToken: true })
+const cleared = await postJSON('/ssh-host/api/config', { clearToken: true })
 rec('clearToken 返回 200', cleared.status === 200, `status=${cleared.status}`)
 rec('清完后 tokenConfigured=false', cleared.body?.tokenConfigured === false)
 

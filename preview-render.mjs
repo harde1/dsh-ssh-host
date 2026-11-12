@@ -77,7 +77,7 @@ const SNAPSHOT = isFresh
     gatePasswordConfigured: false,
     tokenConfigured: false,
     tunnelId: '',
-    logsUrl: 'http://127.0.0.1:3080/natfrp/api/logs',
+    logsUrl: 'http://127.0.0.1:3080/ssh-host/api/logs',
     frpcInstall: { present: true, ok: true },
     frpc: { running: false },
   }
@@ -89,7 +89,7 @@ const SNAPSHOT = isFresh
       gatePasswordConfigured: true,
       tokenConfigured: true,
       tunnelId: '12345',
-      logsUrl: 'http://127.0.0.1:3080/natfrp/api/logs',
+      logsUrl: 'http://127.0.0.1:3080/ssh-host/api/logs',
       frpcInstall: { present: true, ok: true },
       frpc: { running: false },
     }
@@ -100,7 +100,7 @@ const SNAPSHOT = isFresh
       gatePasswordConfigured: true,
       tokenConfigured: true,
       tunnelId: '12345',
-      logsUrl: 'http://127.0.0.1:3080/natfrp/api/logs',
+      logsUrl: 'http://127.0.0.1:3080/ssh-host/api/logs',
       frpcInstall: { present: true, ok: true },
       frpc: { running: true, pid: 8124, tunnelOk: true, tunnelUrl: 'abc123.nyat.app:24567', kickSuspect: false },
     }
@@ -129,7 +129,7 @@ const NODES = {
 globalThis.window = {
   __ModuleLoader__: { load(mod) { module_ = mod } },
   // 让 Panel 初始就把「新建隧道」表单展开，好检查节点列表的排版与配色
-  __natfrpPreviewCreate: isCreate,
+  __sshhostPreviewCreate: isCreate,
   addEventListener() {}, removeEventListener() {},
   open() {}, matchMedia: () => ({ matches: false, addEventListener() {} }),
 }
@@ -147,14 +147,14 @@ globalThis.setTimeout = () => 0
 globalThis.fetch = async (url) => {
   const u = String(url)
   let body = {}
-  if (u.includes('/natfrp/api/state')) body = SNAPSHOT
-  else if (u.includes('/natfrp/api/user')) body = USER
-  else if (u.includes('/natfrp/api/tunnels')) body = TUNNELS
-  else if (u.includes('/natfrp/api/nodes')) body = NODES
+  if (u.includes('/ssh-host/api/state')) body = SNAPSHOT
+  else if (u.includes('/ssh-host/api/user')) body = USER
+  else if (u.includes('/ssh-host/api/tunnels')) body = TUNNELS
+  else if (u.includes('/ssh-host/api/nodes')) body = NODES
   // 端口可用性：面板一进来就会自动验一次（④ 的显示条件就是它），
   // 桩里必须答「可用」，否则预览永远缺 ④ 这一步
-  else if (u.includes('/natfrp/api/port/check')) body = { port: 3083, inRange: true, available: true }
-  else if (u.includes('/natfrp/api/logs')) body = {}
+  else if (u.includes('/ssh-host/api/port/check')) body = { port: 3083, inRange: true, available: true }
+  else if (u.includes('/ssh-host/api/logs')) body = {}
   return { ok: true, status: 200, json: async () => body, text: async () => '' }
 }
 
@@ -227,7 +227,7 @@ function renderNode(node) {
   if (props.type) attrs.push(`type="${esc(props.type)}"`)
   if (props.value !== undefined && props.value !== '') attrs.push(`value="${esc(props.value)}"`)
   if (props.href) attrs.push(`href="#"`)
-  // data-* 原样保留：面板靠 data-natfrp-panel 给 placeholder 定作用域，
+  // data-* 原样保留：面板靠 data-sshhost-panel 给 placeholder 定作用域，
   // 预览里丢了它，<style> 里的规则就永远不生效。
   for (const [k, v] of Object.entries(props)) {
     if (k.startsWith('data-')) attrs.push(`${k}="${esc(v)}"`)
@@ -279,7 +279,7 @@ const body = await renderPanel()
 
 const page = `<!DOCTYPE html>
 <html lang="zh-CN"><head><meta charset="utf-8">
-<title>内网穿透设置面板 · 布局预览</title>
+<title>SSH 主机设置面板 · 布局预览</title>
 <style>
   :root { color-scheme: light; }
   body {

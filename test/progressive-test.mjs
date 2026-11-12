@@ -122,7 +122,7 @@ rec('往上翻旧日志时不被抢滚动条', /logPinned\.current = el\.scrollH
 rec('服务端解析 autoHttps 并白名单校验',
   /const autoHttps = \['auto', 'on', 'off'\]\.includes\(String\(patch\.autoHttps\)\)/.test(index))
 rec('服务端拼成 extra: auto_https = <v>', /const extra = `auto_https = \$\{autoHttps\}`/.test(index))
-rec('建隧道时带上 extra', /note: '由 dsh-sakurafrp 创建',\n\s+extra,/.test(index))
+rec('建隧道时带上 extra', /note: '由 dsh-ssh-host 创建',\n\s+extra,/.test(index))
 
 // ── 11) 端口自动检测（④ 的显示依赖它） ──
 rec('端口变了才自动检测', /if \(autoChecked\.current === p\) return/.test(client))

@@ -39,14 +39,14 @@ function record(name, pass, detail = '') {
   const c1 = createClient('t')
   const ua1 = String(c1.userAgent ?? '')
   record(
-    'UA: 默认 dsh-sakurafrp/0.0.0 且不锁旧硬编码版本',
-    ua1.includes('dsh-sakurafrp/0.0.0') && !ua1.includes('/2.2.0'),
+    'UA: 默认 dsh-ssh-host/0.0.0 且不锁旧硬编码版本',
+    ua1.includes('dsh-ssh-host/0.0.0') && !ua1.includes('/2.2.0'),
     `UA=${c1.userAgent}`,
   )
   const c2 = createClient('t', { version: '9.9.9' })
   record(
     'UA: 随 opts.version 走',
-    String(c2.userAgent ?? '').includes('dsh-sakurafrp/9.9.9'),
+    String(c2.userAgent ?? '').includes('dsh-ssh-host/9.9.9'),
     `UA=${c2.userAgent}`,
   )
 }
@@ -211,7 +211,7 @@ let cookie = ''
       'content-length': Buffer.byteLength(body), accept: 'text/html' } }, body)
   const sc = r.headers['set-cookie']?.[0] ?? ''
   cookie = sc.split(';')[0]
-  record('网关: 正密码 302 + cookie', r.status === 302 && cookie.startsWith('natfrp_gate='))
+  record('网关: 正密码 302 + cookie', r.status === 302 && cookie.startsWith('sshhost_gate='))
 }
 
 // 3.5 ?gate= 直达
@@ -219,7 +219,7 @@ let cookie = ''
   const r = await http({ host: '127.0.0.1', port: GATE_PORT, path: '/?gate=' + encodeURIComponent(PASSWORD), method: 'GET',
     headers: { host: FAKE_HOST, accept: 'text/html' } })
   const sc = r.headers['set-cookie']?.[0] ?? ''
-  record('网关: ?gate= 直达种 cookie', r.status === 302 && sc.startsWith('natfrp_gate='))
+  record('网关: ?gate= 直达种 cookie', r.status === 302 && sc.startsWith('sshhost_gate='))
 }
 
 // 3.6 带 cookie → Host 已改写为回环 → 假 DSH 放行 + polyfill 注入
@@ -227,7 +227,7 @@ let cookie = ''
   const r = await http({ host: '127.0.0.1', port: GATE_PORT, path: '/', method: 'GET',
     headers: { host: FAKE_HOST, accept: 'text/html', cookie } })
   record('网关: Host 改写绕过围栏', r.status === 200 && /FAKE-DSH/.test(r.body), `status=${r.status}`)
-  record('网关: polyfill 注入', /data-natfrp-polyfill/.test(r.body))
+  record('网关: polyfill 注入', /data-sshhost-polyfill/.test(r.body))
 }
 
 // 3.7 带 cookie + launchToken 补齐（验证转发路径带 ?token=）

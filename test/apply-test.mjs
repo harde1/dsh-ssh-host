@@ -63,17 +63,17 @@ try {
   ok('apply() 不抛异常', false, String(e?.stack ?? e?.message ?? e).split('\n').slice(0, 3).join(' | '))
 }
 
-ok('注册了 /natfrp 路由', typeof handler === 'function')
+ok('注册了 /ssh-host 路由', typeof handler === 'function')
 
 const srv = createServer((req, res) => handler(req, res))
 await new Promise((r) => srv.listen(0, '127.0.0.1', r))
 const base = `http://127.0.0.1:${srv.address().port}`
 const getState = async () => {
-  const r = await fetch(`${base}/natfrp/api/state`)
+  const r = await fetch(`${base}/ssh-host/api/state`)
   return { status: r.status, body: await r.json().catch(() => null) }
 }
 const postConfig = async (patch) => {
-  const r = await fetch(`${base}/natfrp/api/config`, {
+  const r = await fetch(`${base}/ssh-host/api/config`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify(patch),
@@ -82,7 +82,7 @@ const postConfig = async (patch) => {
 }
 
 let s = await getState()
-ok('/natfrp/api/state → 200', s.status === 200, `status=${s.status}`)
+ok('/ssh-host/api/state → 200', s.status === 200, `status=${s.status}`)
 ok('snapshot 里 dshPort 正确', s.body?.dshPort === dshPort, `got=${s.body?.dshPort} want=${dshPort}`)
 ok('snapshot 结构完整（tunnelInfo 不炸）', s.body !== null && 'tunnelInfo' in s.body)
 ok('初始未设密码', s.body?.gatePasswordConfigured === false)
@@ -107,17 +107,17 @@ ok('非法端口 80 → 400 且不改端口',
 r = await postConfig({})
 ok('非法端口被拒后当前端口仍是原值', Number(r.body?.gatePort) === GATE_PORT, `gatePort=${r.body?.gatePort} want=${GATE_PORT}`)
 
-r = await fetch(`${base}/natfrp/api/logs`)
-ok('/natfrp/api/logs → 200', r.status === 200, `status=${r.status}`)
+r = await fetch(`${base}/ssh-host/api/logs`)
+ok('/ssh-host/api/logs → 200', r.status === 200, `status=${r.status}`)
 
 // ── 关掉「安装成功」提示后不再出现（跨会话）──
-r = await fetch(`${base}/natfrp/api/frpc/ack-result`, { method: 'POST' })
+r = await fetch(`${base}/ssh-host/api/frpc/ack-result`, { method: 'POST' })
 let ack = await r.json().catch(() => null)
 ok('/frpc/ack-result → 200', r.status === 200, `status=${r.status}`)
 ok('没装过时 ack 不记录任何时间点', ack?.acknowledgedAt === 0, `acked=${ack?.acknowledgedAt}`)
 
 // 前端若传一个「未来」的 at，不能把以后所有成功提示一起吞掉
-r = await fetch(`${base}/natfrp/api/frpc/ack-result`, {
+r = await fetch(`${base}/ssh-host/api/frpc/ack-result`, {
   method: 'POST',
   headers: { 'content-type': 'application/json' },
   body: JSON.stringify({ at: Date.now() + 86_400_000 }),
@@ -126,7 +126,7 @@ ack = await r.json().catch(() => null)
 ok('伪造的未来 at 被忽略', ack?.acknowledgedAt === 0, `acked=${ack?.acknowledgedAt}`)
 
 // 畸形 body 不能让接口 500
-r = await fetch(`${base}/natfrp/api/frpc/ack-result`, {
+r = await fetch(`${base}/ssh-host/api/frpc/ack-result`, {
   method: 'POST',
   headers: { 'content-type': 'application/json' },
   body: '{not json',
@@ -137,15 +137,15 @@ s = await getState()
 ok('未安装时 lastResult 为 null', s.body?.frpcInstall?.lastResult === null)
 
 // 忽略 / 恢复提示仍然可用
-r = await fetch(`${base}/natfrp/api/frpc/dismiss`, { method: 'POST' })
+r = await fetch(`${base}/ssh-host/api/frpc/dismiss`, { method: 'POST' })
 let dj = await r.json().catch(() => null)
 ok('/frpc/dismiss → 200', r.status === 200 && dj?.dismissed === true, `status=${r.status}`)
 ok('dismiss 后 state 标记 dismissed', (await getState()).body?.frpcInstall?.dismissed === true)
-r = await fetch(`${base}/natfrp/api/frpc/undismiss`, { method: 'POST' })
+r = await fetch(`${base}/ssh-host/api/frpc/undismiss`, { method: 'POST' })
 ok('/frpc/undismiss → 200', r.status === 200)
 ok('undismiss 后恢复未忽略', (await getState()).body?.frpcInstall?.dismissed === false)
 
-r = await fetch(`${base}/natfrp/api/nope`)
+r = await fetch(`${base}/ssh-host/api/nope`)
 ok('未知路由 → 404', r.status === 404, `status=${r.status}`)
 
 console.log(results.join('\n'))

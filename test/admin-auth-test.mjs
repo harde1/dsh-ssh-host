@@ -3,7 +3,7 @@
 // 背景（这是个真实踩过的坑）：
 //   管理路由曾经用 req.socket.remoteAddress 判断「是不是本机」，
 //   但公网流量是 frpc 从 127.0.0.1 转发进来的 —— 来源地址恒为回环，
-//   于是任何能访问隧道的人都能未授权 POST /natfrp/api/config 改掉访问密码，
+//   于是任何能访问隧道的人都能未授权 POST /ssh-host/api/config 改掉访问密码，
 //   再登录拿到完整 DSH。本套件锁死「网关侧只认密码门 cookie」这条边界。
 //
 // 全部离线：不连 SakuraFrp、不需要访问密钥、只写临时 DSH_HOME。
@@ -76,7 +76,7 @@ const waitPort = async (port, timeoutMs = 5000) => {
 }
 rec('网关已监听', await waitPort(GATE_PORT))
 
-// 本机设置页走的是 DSH webServer 上的 /natfrp 路由，不经过网关
+// 本机设置页走的是 DSH webServer 上的 /ssh-host 路由，不经过网关
 const local = createServer((req, res) => handler(req, res))
 await new Promise((r) => local.listen(0, '127.0.0.1', r))
 const LOCAL = `http://127.0.0.1:${local.address().port}`
@@ -86,7 +86,7 @@ const json = async (r) => {
   const t = await r.text()
   try { return JSON.parse(t) } catch { return { raw: t.slice(0, 120) } }
 }
-const setPw = (pw) => fetch(`${LOCAL}/natfrp/api/config`, {
+const setPw = (pw) => fetch(`${LOCAL}/ssh-host/api/config`, {
   method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ gatePassword: pw }),
 })
 const login = (pw) => fetch(`${GATE}/__gate/login`, {
@@ -97,30 +97,30 @@ const login = (pw) => fetch(`${GATE}/__gate/login`, {
 })
 const cookieOf = (r) => {
   const raw = r.headers.get('set-cookie') ?? ''
-  const m = raw.match(/natfrp_gate=[^;]+/)
+  const m = raw.match(/sshhost_gate=[^;]+/)
   return m ? m[0] : ''
 }
 
 const PASSWORD = 'GatePass-123456'
 let r = await setPw(PASSWORD)
 rec('本机通道可设密码（不经过网关）', r.status === 200)
-rec('本机通道无需 cookie 即可读 state', (await fetch(`${LOCAL}/natfrp/api/state`)).status === 200)
+rec('本机通道无需 cookie 即可读 state', (await fetch(`${LOCAL}/ssh-host/api/state`)).status === 200)
 
 // ── 1) 未登录：管理接口必须拒绝 ──
-r = await fetch(`${GATE}/natfrp/api/state`, { headers: { accept: 'application/json' } })
+r = await fetch(`${GATE}/ssh-host/api/state`, { headers: { accept: 'application/json' } })
 rec('未登录读 state → 401（不是 200 快照）', r.status === 401, `status=${r.status}`)
 
-r = await fetch(`${GATE}/natfrp/api/logs`)
+r = await fetch(`${GATE}/ssh-host/api/logs`)
 rec('未登录读 logs → 401', r.status === 401, `status=${r.status}`)
 
-r = await fetch(`${GATE}/natfrp/api/config`, {
+r = await fetch(`${GATE}/ssh-host/api/config`, {
   method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ gatePassword: 'attacker-chosen' }),
 })
 const hacked = await json(r)
 rec('未登录改密码 → 401 且不返回快照', r.status === 401 && !hacked.enabled, `status=${r.status}`)
 
 // 破坏性接口同理：删除隧道必须过密码门，未登录连官方接口都不该碰到
-r = await fetch(`${GATE}/natfrp/api/tunnel/delete`, {
+r = await fetch(`${GATE}/ssh-host/api/tunnel/delete`, {
   method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ id: 90001 }),
 })
 const delUnauth = await json(r)
@@ -147,13 +147,13 @@ const rawGet = (path, cookieHeader = '') => new Promise((resolve) => {
   req.end()
 })
 const TRICKS = [
-  ['//natfrp/api/state', '双斜杠'],
-  ['/natfrp%2Fapi%2Fstate', '编码斜杠'],
+  ['//ssh-host/api/state', '双斜杠'],
+  ['/ssh-host%2Fapi%2Fstate', '编码斜杠'],
   ['/NATFRP/api/state', '大写'],
-  ['/natfrp/./api/state', '点段'],
-  ['/natfrp/../natfrp/api/state', '上跳'],
-  ['/natfrp/api/state/', '尾斜杠'],
-  ['/natfrp/api/state?x=1', '带查询串'],
+  ['/ssh-host/./api/state', '点段'],
+  ['/ssh-host/../ssh-host/api/state', '上跳'],
+  ['/ssh-host/api/state/', '尾斜杠'],
+  ['/ssh-host/api/state?x=1', '带查询串'],
 ]
 for (const [p, label] of TRICKS) {
   const res = await rawGet(p)
@@ -161,12 +161,12 @@ for (const [p, label] of TRICKS) {
   rec(`路径花招「${label}」不泄露快照`, !leaked, `${p} → ${res.status}`)
 }
 {
-  const res = await rawGet('/natfrp/api/state', 'natfrp_gate=deadbeef')
+  const res = await rawGet('/ssh-host/api/state', 'sshhost_gate=deadbeef')
   rec('伪造 cookie 被拒', res.status === 401, `status=${res.status}`)
 }
 
 // ── 2) 已登录：管理接口放行 ──
-r = await fetch(`${GATE}/natfrp/api/state`, { headers: { accept: 'application/json', cookie } })
+r = await fetch(`${GATE}/ssh-host/api/state`, { headers: { accept: 'application/json', cookie } })
 const snap = await json(r)
 rec('带 cookie 读 state → 200', r.status === 200 && snap.gatePasswordConfigured === true, `status=${r.status}`)
 
@@ -200,12 +200,12 @@ const wsHandshake = (cookieHeader) => new Promise((resolve) => {
 }
 
 // ── 4) 已登录可以改密码，改完旧 cookie 失效、新密码可登录 ──
-r = await fetch(`${GATE}/natfrp/api/config`, {
+r = await fetch(`${GATE}/ssh-host/api/config`, {
   method: 'POST', headers: { 'content-type': 'application/json', cookie }, body: JSON.stringify({ gatePassword: 'NewPass-abcdef' }),
 })
 rec('带 cookie 改密码 → 200', r.status === 200, `status=${r.status}`)
 {
-  const after = await fetch(`${GATE}/natfrp/api/state`, { headers: { accept: 'application/json', cookie } })
+  const after = await fetch(`${GATE}/ssh-host/api/state`, { headers: { accept: 'application/json', cookie } })
   rec('改密后旧 cookie 失效', after.status === 401, `status=${after.status}`)
 }
 {

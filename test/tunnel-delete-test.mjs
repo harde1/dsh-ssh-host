@@ -112,12 +112,12 @@ const postJSON = async (p, body) => {
 await new Promise((r) => setTimeout(r, 200))
 calls.length = 0
 
-const boot = await getJSON('/natfrp/api/state')
+const boot = await getJSON('/ssh-host/api/state')
 rec('前置：当前隧道是 90001', String(boot.body?.tunnelId) === '90001', String(boot.body?.tunnelId))
 rec('前置：开关是开的', boot.body?.enabled === true, String(boot.body?.enabled))
 
 // ── 1) 删除「非当前」隧道：配置不动 ──
-const other = await postJSON('/natfrp/api/tunnel/delete', { id: 90002 })
+const other = await postJSON('/ssh-host/api/tunnel/delete', { id: 90002 })
 rec('POST /tunnel/delete 返回 200', other.status === 200, `status=${other.status} ${JSON.stringify(other.body)}`)
 rec('非当前隧道返回 wasCurrent=false', other.body?.wasCurrent === false, String(other.body?.wasCurrent))
 rec('删非当前隧道后当前隧道不变', String(other.body?.tunnelId) === '90001', String(other.body?.tunnelId))
@@ -132,46 +132,46 @@ rec('响应带回官方 deleted', JSON.stringify(other.body?.deleted) === '[9000
 
 // ── 2) 删除当前隧道：清 tunnelId、关开关 ──
 calls.length = 0
-const current = await postJSON('/natfrp/api/tunnel/delete', { id: 90001 })
+const current = await postJSON('/ssh-host/api/tunnel/delete', { id: 90001 })
 rec('删当前隧道返回 200', current.status === 200, `status=${current.status}`)
 rec('删当前隧道返回 wasCurrent=true', current.body?.wasCurrent === true, String(current.body?.wasCurrent))
 rec('删当前隧道后 tunnelId 清空', String(current.body?.tunnelId) === '', JSON.stringify(current.body?.tunnelId))
 rec('删当前隧道后开关落回关闭', current.body?.enabled === false, String(current.body?.enabled))
 rec('删当前隧道后 frpc 不运行', current.body?.frpc?.running !== true)
 
-const currentAfter = await getJSON('/natfrp/api/state')
+const currentAfter = await getJSON('/ssh-host/api/state')
 rec('状态已落盘（重新读 /state 仍是关的）', currentAfter.body?.enabled === false && String(currentAfter.body?.tunnelId) === '',
   `enabled=${currentAfter.body?.enabled} tunnelId=${JSON.stringify(currentAfter.body?.tunnelId)}`)
 
 // ── 3) failed 里出现不代表删除失败（官方：已删除但没踢下线）──
 calls.length = 0
-const kicked = await postJSON('/natfrp/api/tunnel/delete', { id: 90003 })
+const kicked = await postJSON('/ssh-host/api/tunnel/delete', { id: 90003 })
 rec('deleted 命中就算成功，即使 failed 里有它', kicked.status === 200 && kicked.body?.ok === true,
   `status=${kicked.status}`)
 rec('failed 原样带回给界面', JSON.stringify(kicked.body?.failed) === '[90003]', JSON.stringify(kicked.body?.failed))
 rec('非当前隧道删除后仍没有当前隧道', String(kicked.body?.tunnelId) === '', JSON.stringify(kicked.body?.tunnelId))
 
 // ── 4) 官方没删掉 → 502，本地状态不动 ──
-const beforeMiss = await getJSON('/natfrp/api/state')
-const miss = await postJSON('/natfrp/api/tunnel/delete', { id: 90004 })
+const beforeMiss = await getJSON('/ssh-host/api/state')
+const miss = await postJSON('/ssh-host/api/tunnel/delete', { id: 90004 })
 rec('deleted 里没有该 id → 502 delete-failed',
   miss.status === 502 && miss.body?.error === 'delete-failed', `status=${miss.status} ${JSON.stringify(miss.body)}`)
-const afterMiss = await getJSON('/natfrp/api/state')
+const afterMiss = await getJSON('/ssh-host/api/state')
 rec('删除未生效时本地状态不变',
   String(afterMiss.body?.tunnelId) === String(beforeMiss.body?.tunnelId)
   && afterMiss.body?.enabled === beforeMiss.body?.enabled)
 
 // ── 5) 官方 API 报错 → 502 api-failed，透传原始信息 ──
-const apiErr = await postJSON('/natfrp/api/tunnel/delete', { id: 90005 })
+const apiErr = await postJSON('/ssh-host/api/tunnel/delete', { id: 90005 })
 rec('API 500 → 502 api-failed', apiErr.status === 502 && apiErr.body?.error === 'api-failed',
   `status=${apiErr.status}`)
 rec('透传官方错误信息', /internal error/.test(String(apiErr.body?.message ?? '')), String(apiErr.body?.message))
 
 // ── 6) 参数不合法时不打官方接口 ──
 calls.length = 0
-const bad = await postJSON('/natfrp/api/tunnel/delete', { id: 'abc' })
+const bad = await postJSON('/ssh-host/api/tunnel/delete', { id: 'abc' })
 rec('id 非数字 → 400 bad-id', bad.status === 400 && bad.body?.error === 'bad-id', `status=${bad.status}`)
-const missing = await postJSON('/natfrp/api/tunnel/delete', {})
+const missing = await postJSON('/ssh-host/api/tunnel/delete', {})
 rec('缺少 id → 400 bad-id', missing.status === 400 && missing.body?.error === 'bad-id', `status=${missing.status}`)
 rec('参数不合法时不调官方接口', calls.filter((c) => c.path === '/v4/tunnel/delete').length === 0,
   String(calls.filter((c) => c.path === '/v4/tunnel/delete').length))

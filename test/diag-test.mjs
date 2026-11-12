@@ -74,7 +74,7 @@ rec('初始值不误报为黄', /let value = 'red'/.test(src))
 
 // ── 状态点渲染：颜色来自 DIAG 映射 ──
 rec('图标用 DIAG 映射取色', /DIAG\[diag\] \|\| DIAG\.yellow/.test(src))
-rec('CSS 有 red 档', /data-natfrp-state="red"/.test(src))
+rec('CSS 有 red 档', /data-sshhost-state="red"/.test(src))
 
 const ok = results.every(Boolean)
 console.log(`\n${results.filter(Boolean).length}/${results.length} passed`)

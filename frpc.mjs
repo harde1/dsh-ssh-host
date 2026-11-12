@@ -96,7 +96,7 @@ export function createFrpcManager({
     }
   }
 
-  /** 管理事件同时进缓冲（/natfrp/api/logs 可见）与宿主日志。 */
+  /** 管理事件同时进缓冲（/ssh-host/api/logs 可见）与宿主日志。 */
   function internalLog(msg) {
     pushLine(`[manager] ${msg}`)
     log(msg)

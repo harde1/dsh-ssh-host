@@ -63,9 +63,9 @@ const srv = createServer((req, res) => handler(req, res))
 await new Promise((r) => srv.listen(0, '127.0.0.1', r))
 const base = `http://127.0.0.1:${srv.address().port}`
 
-const state = await fetch(`${base}/natfrp/api/state`).then((r) => r.json()).catch(() => null)
+const state = await fetch(`${base}/ssh-host/api/state`).then((r) => r.json()).catch(() => null)
 
-ok('/natfrp/api/state 可达', state !== null)
+ok('/ssh-host/api/state 可达', state !== null)
 // 这条是核心：旧实现在这里恒为 false，因为 tokenNow() 不读凭据库
 ok('snapshot.tokenConfigured = true（密钥来自凭据库）', state?.tokenConfigured === true, `got=${state?.tokenConfigured}`)
 
@@ -86,7 +86,7 @@ mod2.apply({
 await new Promise((r) => setTimeout(r, 200))
 const srv2 = createServer((req, res) => handler2(req, res))
 await new Promise((r) => srv2.listen(0, '127.0.0.1', r))
-const state2 = await fetch(`http://127.0.0.1:${srv2.address().port}/natfrp/api/state`).then((r) => r.json()).catch(() => null)
+const state2 = await fetch(`http://127.0.0.1:${srv2.address().port}/ssh-host/api/state`).then((r) => r.json()).catch(() => null)
 ok('凭据库为空时 tokenConfigured = false', state2?.tokenConfigured === false, `got=${state2?.tokenConfigured}`)
 
 const passed = results.filter(Boolean).length

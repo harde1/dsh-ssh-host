@@ -1708,7 +1708,7 @@ export function apply(ctx, config = {}) {
     if (path === '/ssh-host') {
       const s = await snapshot(originOf(req))
       res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' })
-      res.end(`<!doctype html><meta charset="utf-8"><title>natfrp</title>
+      res.end(`<!doctype html><meta charset="utf-8"><title>SSH 主机</title>
 <pre>${JSON.stringify(s, null, 2)}</pre>
 <p><a href="/ssh-host/api/logs">frpc 日志</a> · <a href="/ssh-host/api/tunnels">隧道列表</a> · <a href="/ssh-host/api/user">账号信息</a></p>`)
       return true

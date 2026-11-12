@@ -54,11 +54,11 @@ await new Promise((r) => srv.listen(0, '127.0.0.1', r))
 const base = `http://127.0.0.1:${srv.address().port}`
 
 const getState = async () => {
-  const r = await fetch(`${base}/natfrp/api/state`)
+  const r = await fetch(`${base}/ssh-host/api/state`)
   return await r.json().catch(() => null)
 }
 const postConfig = async (patch) => {
-  const r = await fetch(`${base}/natfrp/api/config`, {
+  const r = await fetch(`${base}/ssh-host/api/config`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify(patch),
@@ -73,8 +73,8 @@ ok('新装本机端口为空', s?.gatePort === null, `gatePort=${JSON.stringify(
 ok('没端口时网关不监听', s?.gateRunning === false, `gateRunning=${s?.gateRunning}`)
 ok('新装没有访问密钥', s?.tokenConfigured === false)
 
-const dataState = existsSync(join(home, 'dsh-sakurafrp', 'state.json'))
-  ? JSON.parse(readFileSync(join(home, 'dsh-sakurafrp', 'state.json'), 'utf8'))
+const dataState = existsSync(join(home, 'dsh-ssh-host', 'state.json'))
+  ? JSON.parse(readFileSync(join(home, 'dsh-ssh-host', 'state.json'), 'utf8'))
   : {}
 ok('新装不往 state.json 里写默认端口', !('gatePort' in dataState),
   JSON.stringify(Object.keys(dataState)))
@@ -102,7 +102,7 @@ ok('重新读取仍是空（不复活默认值）', s?.gatePort === null, `gateP
 
 // ── 4) 没有端口时不许建隧道（否则建出来就连不到东西）──
 await postConfig({ token: 'dummy-token-for-test' })
-const create = await fetch(`${base}/natfrp/api/tunnel/create`, {
+const create = await fetch(`${base}/ssh-host/api/tunnel/create`, {
   method: 'POST',
   headers: { 'content-type': 'application/json' },
   body: JSON.stringify({ name: 'T', node: 1 }),
@@ -114,7 +114,7 @@ ok('无端口时建隧道被拒（400 no-port）',
 ok('拒绝时给出人话提示', /端口/.test(createBody?.message ?? ''), createBody?.message ?? '')
 
 // ── 5) 端口检测接口对空值给 400，不是 200 ──
-const chk = await fetch(`${base}/natfrp/api/port/check?port=`)
+const chk = await fetch(`${base}/ssh-host/api/port/check?port=`)
 ok('空端口检测 → 400', chk.status === 400, `status=${chk.status}`)
 
 // ── 6) 界面层不许把「空端口」渲染成 0 或一个假数字 ──

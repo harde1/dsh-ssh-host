@@ -47,7 +47,7 @@ mod.apply(ctx, { tokenRef: 'NATFRP_TOKEN' })
 const srv = createServer((req, res) => handler(req, res))
 await new Promise((r) => srv.listen(0, '127.0.0.1', r))
 const base = `http://127.0.0.1:${srv.address().port}`
-const s = await (await fetch(`${base}/natfrp/api/state`)).json()
+const s = await (await fetch(`${base}/ssh-host/api/state`)).json()
 
 console.log('冷启动快照:', JSON.stringify({
   enabled: s.enabled,
@@ -69,12 +69,12 @@ ok('访问密钥默认未配', s.tokenConfigured === false)
 ok('访问密码默认未配', s.gatePasswordConfigured === false)
 
 // ── 不产生任何残留 ──
-ok('首次加载不创建 state.json（没东西可存）', !existsSync(join(home, 'dsh-sakurafrp', 'state.json')))
-ok('首次加载不创建密码文件', !existsSync(join(home, 'dsh-sakurafrp', 'gate-password.txt')))
-ok('首次加载不下载 frpc', !existsSync(join(home, 'dsh-sakurafrp', 'frpc-standalone.exe')))
+ok('首次加载不创建 state.json（没东西可存）', !existsSync(join(home, 'dsh-ssh-host', 'state.json')))
+ok('首次加载不创建密码文件', !existsSync(join(home, 'dsh-ssh-host', 'gate-password.txt')))
+ok('首次加载不下载 frpc', !existsSync(join(home, 'dsh-ssh-host', 'frpc-standalone.exe')))
 
 // 状态文件若存在，也不该含 enabled:true / 旧端口（防止 config 被写回磁盘时夹带）
-const statePath = join(home, 'dsh-sakurafrp', 'state.json')
+const statePath = join(home, 'dsh-ssh-host', 'state.json')
 if (existsSync(statePath)) {
   const st = JSON.parse(readFileSync(statePath, 'utf8'))
   ok('state.json 里没有 enabled:true', st.enabled !== true)
@@ -82,8 +82,8 @@ if (existsSync(statePath)) {
 }
 
 // ── 路由本身可用（不是靠错误页面蒙过去的）──
-const r = await fetch(`${base}/natfrp/api/state`)
-ok('/natfrp/api/state → 200', r.status === 200, `status=${r.status}`)
+const r = await fetch(`${base}/ssh-host/api/state`)
+ok('/ssh-host/api/state → 200', r.status === 200, `status=${r.status}`)
 
 await new Promise((r2) => srv.close(r2))
 await new Promise((r2) => upstream.close(r2))

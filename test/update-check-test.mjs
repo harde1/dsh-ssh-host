@@ -2,7 +2,7 @@
 //
 // 覆盖三块：
 //   1) 版本提取 / 比较的后端纯函数（已在 installer-test 里，这里补端到端语义）
-//   2) /natfrp/api/frpc/update-check 路由：结论、节流、缓存、缺装
+//   2) /ssh-host/api/frpc/update-check 路由：结论、节流、缓存、缺装
 //   3) 前端结构断言：hooks 必须声明在提前 return 之前
 //
 // ⚠️ 第 3 条守的是一个真实踩过的坑：FrpcVersionBar 曾经先
@@ -79,7 +79,7 @@ const home = mkdtempSync(join(tmpdir(), 'dsh-update-check-'))
 process.env.DSH_HOME = home
 
 // 造一个「已装好」的 frpc：内容无所谓，探版本被 mock 掉（见下）
-const binDir = join(home, 'dsh-sakurafrp')
+const binDir = join(home, 'dsh-ssh-host')
 mkdirSync(binDir, { recursive: true })
 
 const mod = await import('../index.js')
@@ -108,7 +108,7 @@ const hit = async (p) => {
 
 // 本地没装 frpc：应引导去安装，而不是报「有新版本」
 {
-  const r = await hit('/natfrp/api/frpc/update-check')
+  const r = await hit('/ssh-host/api/frpc/update-check')
   rec('未安装时 → 400 且 reason=not-installed',
     r.status === 400 && r.body.reason === 'not-installed', `status=${r.status} reason=${r.body.reason}`)
   rec('未安装时不给 updateAvailable',
@@ -117,7 +117,7 @@ const hit = async (p) => {
 
 // 节流：60s 内再点必须被拦，且能算出剩余秒数
 {
-  const r = await hit('/natfrp/api/frpc/update-check')
+  const r = await hit('/ssh-host/api/frpc/update-check')
   rec('冷却期内再点 → 429 throttled',
     r.status === 429 && r.body.throttled === true && r.body.error === 'throttled',
     `status=${r.status} throttled=${r.body.throttled}`)
@@ -130,7 +130,7 @@ const hit = async (p) => {
 // 连点 3 次都该被拦（不是只有第一次拦）
 {
   const codes = []
-  for (let i = 0; i < 3; i++) codes.push((await hit('/natfrp/api/frpc/update-check')).status)
+  for (let i = 0; i < 3; i++) codes.push((await hit('/ssh-host/api/frpc/update-check')).status)
   rec('连点 3 次全部被拦（429）', codes.every((c) => c === 429), codes.join(','))
 }
 

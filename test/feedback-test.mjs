@@ -53,7 +53,7 @@ rec('失败 20 秒后消失（留更久便于阅读）', /20000/.test(client))
 // 之前叉号只写本地 state，组件一重建就复活 → 每次进设置都弹「安装成功」。
 rec('服务端落盘 ack 时间戳', /frpcSuccessAckAt/.test(index))
 rec('snapshot 标注 acknowledged', /acknowledged: Number\(installResult\.at\) <= successAckAt/.test(index))
-rec('有 ack 接口', /\/natfrp\/api\/frpc\/ack-result/.test(index))
+rec('有 ack 接口', /\/ssh-host\/api\/frpc\/ack-result/.test(index))
 rec('ack 只有更晚的结果才推进', /if \(when > successAckAt\)/.test(index))
 rec('前端尊重服务端 acknowledged', /const ackedPersisted = last\?\.acknowledged === true/.test(client))
 rec('叉号走落盘接口（不再只改本地）', /onClick: \(\) => \{ void ackResult\(last\?\.at \?\? Date\.now\(\)\) \}/.test(client))

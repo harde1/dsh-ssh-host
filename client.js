@@ -252,7 +252,7 @@ window.__ModuleLoader__.load({
      * 面板的 data 属性上，不会碰到宿主或其它插件。
      */
     const FIELD_CSS = `
-[data-natfrp-panel] input::placeholder {
+[data-sshhost-panel] input::placeholder {
   color: var(--dsw-alias-label-secondary, #6b7280);
   opacity: .8;
 }
@@ -373,7 +373,7 @@ window.__ModuleLoader__.load({
           if (typeof document !== 'undefined' && document.body) {
             const rows = document.querySelectorAll('button[aria-label="SSH 主机"]')
             for (const row of rows) {
-              if (!row.querySelector('.natfrp-switch')) {
+              if (!row.querySelector('.sshhost-switch')) {
                 ensureSwitchNode(row)
                 syncSwitch(row, enabled)
               }
@@ -845,11 +845,11 @@ window.__ModuleLoader__.load({
     }
 
     /**
-     * 仅给布局预览用的开关（preview-render.mjs 设置 window.__natfrpPreviewCreate）。
+     * 仅给布局预览用的开关（preview-render.mjs 设置 window.__sshhostPreviewCreate）。
      * 生产环境这个属性不存在，恒为 false —— 不改变任何真实行为，
      * 只是让「新建表单展开」这一屏也能被渲染出来检查排版。
      */
-    const PREVIEW_CREATE = typeof window !== 'undefined' && window.__natfrpPreviewCreate === true
+    const PREVIEW_CREATE = typeof window !== 'undefined' && window.__sshhostPreviewCreate === true
 
     // ── 日志展开状态的持久化 ──
     //
@@ -1402,7 +1402,7 @@ window.__ModuleLoader__.load({
             ? '填个本机端口，确认可用后才会出现最后一步。'
             : ''
 
-      return h('div', { style: S.wrap, 'data-natfrp-panel': '' },
+      return h('div', { style: S.wrap, 'data-sshhost-panel': '' },
         // placeholder 配色跟着主题 token 走（见 FIELD_CSS 注释）
         h('style', null, FIELD_CSS),
 
@@ -1950,19 +1950,19 @@ button[aria-label="SSH 主机"]::after {
   background: #eab308;
   transition: background .2s ease;
 }
-body[data-natfrp-mode="narrow"] button[aria-label="SSH 主机"]::after {
+body[data-sshhost-mode="narrow"] button[aria-label="SSH 主机"]::after {
   content: none;  /* 折叠模式：点画在图标内嵌位置 */
 }
-body[data-natfrp-state="green"] button[aria-label="SSH 主机"]::after {
+body[data-sshhost-state="green"] button[aria-label="SSH 主机"]::after {
   background: #22c55e;
 }
-body[data-natfrp-state="red"] button[aria-label="SSH 主机"]::after {
+body[data-sshhost-state="red"] button[aria-label="SSH 主机"]::after {
   background: #ef4444;
 }
 
 /* ── 开关（可点，红/绿表示开/关）──
    由组件动态插入为行的最后一个子元素；order:2 保证排在状态点右侧。 */
-button[aria-label="SSH 主机"] > .natfrp-switch {
+button[aria-label="SSH 主机"] > .sshhost-switch {
   order: 2;
   flex: none;
   position: relative;
@@ -1976,10 +1976,10 @@ button[aria-label="SSH 主机"] > .natfrp-switch {
   background: #ef4444;   /* 关（默认安全色） */
   transition: background .18s ease, opacity .18s ease;
 }
-button[aria-label="SSH 主机"] > .natfrp-switch[data-on="true"] {
+button[aria-label="SSH 主机"] > .sshhost-switch[data-on="true"] {
   background: #22c55e;   /* 开 */
 }
-button[aria-label="SSH 主机"] > .natfrp-switch::before {
+button[aria-label="SSH 主机"] > .sshhost-switch::before {
   content: '';
   position: absolute;
   top: 2px;
@@ -1991,14 +1991,14 @@ button[aria-label="SSH 主机"] > .natfrp-switch::before {
   box-shadow: 0 1px 2px rgba(0,0,0,.25);
   transition: transform .18s ease;
 }
-button[aria-label="SSH 主机"] > .natfrp-switch[data-on="true"]::before {
+button[aria-label="SSH 主机"] > .sshhost-switch[data-on="true"]::before {
   transform: translateX(12px);
 }
-button[aria-label="SSH 主机"] > .natfrp-switch[data-busy="true"] {
+button[aria-label="SSH 主机"] > .sshhost-switch[data-busy="true"] {
   opacity: .55;
   cursor: progress;
 }
-body[data-natfrp-mode="narrow"] button[aria-label="SSH 主机"] > .natfrp-switch {
+body[data-sshhost-mode="narrow"] button[aria-label="SSH 主机"] > .sshhost-switch {
   display: none;  /* 折叠模式空间不足，只在展开时提供开关 */
 }
 `.trim()
@@ -2016,16 +2016,16 @@ body[data-natfrp-mode="narrow"] button[aria-label="SSH 主机"] > .natfrp-switch
       if (typeof document === 'undefined') return
       const root = document.body
       if (!root) return
-      if (root.dataset.natfrpState !== diag) root.dataset.natfrpState = diag
+      if (root.dataset.sshhostState !== diag) root.dataset.sshhostState = diag
       const mode = wide ? 'wide' : 'narrow'
-      if (root.dataset.natfrpMode !== mode) root.dataset.natfrpMode = mode
+      if (root.dataset.sshhostMode !== mode) root.dataset.sshhostMode = mode
     }
 
     // ── 侧边栏开关（真实 DOM，挂在行末尾）──
     // 为什么不用伪元素：一个元素只有一个 ::after，已被状态点占用；
     // 且伪元素不可点击。故注入真实 button，并阻止事件冒泡到行本身
     // （否则点开关会顺带打开面板）。
-    const SWITCH_CLASS = 'natfrp-switch'
+    const SWITCH_CLASS = 'sshhost-switch'
 
     function findRow() {
       if (typeof document === 'undefined') return null
@@ -2174,7 +2174,7 @@ body[data-natfrp-mode="narrow"] button[aria-label="SSH 主机"] > .natfrp-switch
           flexDirection: 'column',
           overflow: 'hidden',
         },
-        'data-plugin': 'natfrp',
+        'data-plugin': 'sshhost',
       },
         h('div', {
           style: {
@@ -2191,7 +2191,7 @@ body[data-natfrp-mode="narrow"] button[aria-label="SSH 主机"] > .natfrp-switch
         }, h(Panel)))
     }
 
-    const NATFRP_PANEL_KEY = 'natfrp'
+    const NATFRP_PANEL_KEY = 'sshhost'
     const NATFRP_SIDEBAR_ORDER = 21 // Jet Hub 是 20，紧随其后
 
     return {
@@ -2245,7 +2245,7 @@ body[data-natfrp-mode="narrow"] button[aria-label="SSH 主机"] > .natfrp-switch
         // 3) 设置页区块（保留原入口）
         ctx.slots.inject('settings.section', () => ctx.slots.register({
           name: 'settings.section',
-          id: 'natfrp',
+          id: 'sshhost',
           order: 61,
           label: 'SSH 主机',
         }, Panel))

@@ -86,7 +86,7 @@ function makeOpen({ right, tabs, base }) {
     tabs: { get: (k) => (k === 'browser' ? {} : undefined) },
     base: 'http://127.0.0.1:3080',
   })
-  const r = openExternal('http://127.0.0.1:3080/natfrp/api/logs')
+  const r = openExternal('http://127.0.0.1:3080/ssh-host/api/logs')
   rec('绝对 URL → 内置标签', r === 'tab' && tabCalls.length === 1, r)
 }
 {
@@ -96,14 +96,14 @@ function makeOpen({ right, tabs, base }) {
     tabs: { get: () => ({}) },
     base: 'http://127.0.0.1:3080',
   })
-  openExternal('/natfrp/api/logs')
+  openExternal('/ssh-host/api/logs')
   const got = tabCalls[0]?.[1]?.params?.url
-  rec('相对 URL 被补全', got === 'http://127.0.0.1:3080/natfrp/api/logs', String(got))
+  rec('相对 URL 被补全', got === 'http://127.0.0.1:3080/ssh-host/api/logs', String(got))
 }
 {
   const tabCalls = []
   const { openExternal } = makeOpen({ right: { openTab: (...a) => tabCalls.push(a) }, tabs: { get: () => ({}) }, base: '' })
-  const r = openExternal('/natfrp/api/logs')
+  const r = openExternal('/ssh-host/api/logs')
   rec('无 base 的相对 URL 被拒绝', r === 'rejected' && tabCalls.length === 0, r)
 }
 {

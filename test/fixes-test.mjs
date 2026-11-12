@@ -31,9 +31,9 @@ const rec = (name, cond, extra = '') => {
   rec('跨盘自定义路径原样显示（不被截成 ~/.dsh/.exe）', d === cross, d)
   rec('跨盘路径不出现半截后缀', !/^~\/\.dsh\/\.[a-z]+$/i.test(d), d)
 
-  const inside = join(home, 'dsh-sakurafrp', 'frpc.exe')
+  const inside = join(home, 'dsh-ssh-host', 'frpc.exe')
   rec('home 之下的路径仍缩成 ~/.dsh/...',
-    displayPath(inside, home) === '~/.dsh/dsh-sakurafrp/frpc.exe', displayPath(inside, home))
+    displayPath(inside, home) === '~/.dsh/dsh-ssh-host/frpc.exe', displayPath(inside, home))
   rec('home 本身仍是 ~/.dsh', displayPath(home, home) === '~/.dsh', displayPath(home, home))
 }
 
@@ -69,9 +69,9 @@ const rec = (name, cond, extra = '') => {
 // ---------- 3) 旧 state.json 明文密码迁移 ----------
 const home = mkdtempSync(join(tmpdir(), 'dsh-fixes-test-'))
 process.env.DSH_HOME = home
-mkdirSync(join(home, 'dsh-sakurafrp'), { recursive: true })
+mkdirSync(join(home, 'dsh-ssh-host'), { recursive: true })
 writeFileSync(
-  join(home, 'dsh-sakurafrp', 'state.json'),
+  join(home, 'dsh-ssh-host', 'state.json'),
   JSON.stringify({ enabled: false, tunnelId: '', gatePassword: 'legacy-plain-pass' }),
 )
 
@@ -90,11 +90,11 @@ const ctx = {
 mod.apply(ctx, { enabled: false })
 
 {
-  const stateRaw = readFileSync(join(home, 'dsh-sakurafrp', 'state.json'), 'utf8')
+  const stateRaw = readFileSync(join(home, 'dsh-ssh-host', 'state.json'), 'utf8')
   const state = JSON.parse(stateRaw)
   rec('state.json 不再包含 gatePassword', !('gatePassword' in state), stateRaw.slice(0, 100))
   rec('state.json 里搜不到明文密码', !stateRaw.includes('legacy-plain-pass'))
-  const pwFile = join(home, 'dsh-sakurafrp', 'gate-password.txt')
+  const pwFile = join(home, 'dsh-ssh-host', 'gate-password.txt')
   rec('密码已迁到 0600 密码文件', existsSync(pwFile) && readFileSync(pwFile, 'utf8') === 'legacy-plain-pass')
 }
 
@@ -107,14 +107,14 @@ let localSrv = null
   await new Promise((r) => srv.listen(0, '127.0.0.1', r))
   base = `http://127.0.0.1:${srv.address().port}`
 
-  const r80 = await fetch(`${base}/natfrp/api/port/check?port=80`)
+  const r80 = await fetch(`${base}/ssh-host/api/port/check?port=80`)
   rec('特权端口 80 → 400', r80.status === 400, `status=${r80.status}`)
 
-  const rOk = await fetch(`${base}/natfrp/api/port/check?port=65001`)
+  const rOk = await fetch(`${base}/ssh-host/api/port/check?port=65001`)
   const body = await rOk.json().catch(() => null)
   rec('合法端口 65001 → 200 且 inRange', rOk.status === 200 && body?.inRange === true, `status=${rOk.status}`)
 
-  const rBad = await fetch(`${base}/natfrp/api/port/check?port=99999`)
+  const rBad = await fetch(`${base}/ssh-host/api/port/check?port=99999`)
   rec('越界端口 99999 → 400', rBad.status === 400, `status=${rBad.status}`)
 }
 
@@ -139,7 +139,7 @@ const ctx = {
 mod.apply(ctx, { enabled: false, gatePassword: 'cfg-pass' })
 const srv = createServer((req, res) => handler(req, res))
 await new Promise((r) => srv.listen(0, '127.0.0.1', r))
-const res = await fetch('http://127.0.0.1:' + srv.address().port + '/natfrp/api/state')
+const res = await fetch('http://127.0.0.1:' + srv.address().port + '/ssh-host/api/state')
 const j = await res.json()
 console.log('CONFIGURED=' + j.gatePasswordConfigured)
 srv.close()
@@ -149,10 +149,10 @@ process.exit(0)
     env: { ...process.env, DSH_HOME: home }, encoding: 'utf8',
   })
 
-  const postCfg = (patch) => fetch(`${base}/natfrp/api/config`, {
+  const postCfg = (patch) => fetch(`${base}/ssh-host/api/config`, {
     method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(patch),
   })
-  const stateFile = join(home, 'dsh-sakurafrp', 'state.json')
+  const stateFile = join(home, 'dsh-ssh-host', 'state.json')
 
   let r = await postCfg({ clearGatePassword: true })
   rec('清空密码 → 200', r.status === 200, `status=${r.status}`)
@@ -168,7 +168,7 @@ process.exit(0)
 // ---------- 6) 一次 API 失败不能被永久记成「接口异常」 ----------
 {
   // 给插件一个假 token，让 apiOrNull() 真的建出客户端
-  writeFileSync(join(home, 'dsh-sakurafrp', 'token.txt'), 'fake-token-for-test')
+  writeFileSync(join(home, 'dsh-ssh-host', 'token.txt'), 'fake-token-for-test')
 
   const realFetch = globalThis.fetch
   let apiMode = 'fail'
@@ -182,14 +182,14 @@ process.exit(0)
     return realFetch(input, init)
   }
 
-  const state = async () => (await fetch(`${base}/natfrp/api/state`)).json()
+  const state = async () => (await fetch(`${base}/ssh-host/api/state`)).json()
 
-  const bad = await fetch(`${base}/natfrp/api/tunnels`)
+  const bad = await fetch(`${base}/ssh-host/api/tunnels`)
   rec('API 失败时 tunnels → 502', bad.status === 502, `status=${bad.status}`)
   rec('失败后 apiError 有值', Boolean((await state()).apiError))
 
   apiMode = 'ok'
-  const good = await fetch(`${base}/natfrp/api/tunnels`)
+  const good = await fetch(`${base}/ssh-host/api/tunnels`)
   rec('API 恢复后 tunnels → 200', good.status === 200, `status=${good.status}`)
   rec('成功后 apiError 自愈（不会永久标红）', (await state()).apiError === undefined)
 
@@ -224,8 +224,8 @@ process.exit(0)
   }
 
   // 未登录访问深链 → 登录页带隐藏 next，登录成功后回到原页
-  const lp = await run(fakeReq(null, { url: '/natfrp?x=1' }))
-  rec('登录页带上回跳地址', lp.page.includes('name="next" value="/natfrp?x=1"'))
+  const lp = await run(fakeReq(null, { url: '/ssh-host?x=1' }))
+  rec('登录页带上回跳地址', lp.page.includes('name="next" value="/ssh-host?x=1"'))
 
   // next 来自请求 URL，可被攻击者构造 —— 嵌进属性前必须转义
   const xss = await run(fakeReq(null, { url: '/a?b="><script>alert(1)</script>' }))
@@ -235,7 +235,7 @@ process.exit(0)
     `password=${encodeURIComponent('test-pass')}${next ? `&next=${encodeURIComponent(next)}` : ''}`,
     { method: 'POST', url: '/__gate/login' },
   ))
-  rec('登录成功回跳原地址', (await login('/natfrp?a=1')).loc === '/natfrp?a=1')
+  rec('登录成功回跳原地址', (await login('/ssh-host?a=1')).loc === '/ssh-host?a=1')
   rec('没带 next 回首页', (await login('')).loc === '/')
   // 开放重定向防线：只认站内绝对路径
   rec('//evil.com 被拒回首页', (await login('//evil.com')).loc === '/')
@@ -270,8 +270,8 @@ process.exit(0)
   // placeholder 的配色只能靠选择器（inline style 管不到伪元素），
   // 且必须限定在本插件面板内，不能污染宿主。
   rec('placeholder 走面板作用域的样式',
-    /\[data-natfrp-panel\] input::placeholder/.test(client)
-    && /'data-natfrp-panel': ''/.test(client))
+    /\[data-sshhost-panel\] input::placeholder/.test(client)
+    && /'data-sshhost-panel': ''/.test(client))
 }
 
 console.log(results.join('\n'))

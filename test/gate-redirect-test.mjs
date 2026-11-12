@@ -114,7 +114,7 @@ const FAKE_HOST = 'www.tunnel.nyat.app:12345'
     headers: { host: FAKE_HOST, accept: 'text/html',
       'content-type': 'application/x-www-form-urlencoded',
       'content-length': Buffer.byteLength(loginBody) } }, loginBody)
-  const gateCookie = pick(login, 'natfrp_gate')
+  const gateCookie = pick(login, 'sshhost_gate')
 
   record('重定向: 登录拿到密码门 cookie', login.status === 302 && Boolean(gateCookie))
 
@@ -129,7 +129,7 @@ const FAKE_HOST = 'www.tunnel.nyat.app:12345'
       headers: { host: FAKE_HOST, accept: 'text/html', cookie: gateCookie } })
     lastStatus = r.status
     seen.push(`${cur}→${r.status}`)
-    if (pick(r, 'natfrp_tok') !== '') sawMark = true
+    if (pick(r, 'sshhost_tok') !== '') sawMark = true
     if (r.status >= 300 && r.status < 400) {
       cur = r.headers.location === './' ? '/' : String(r.headers.location ?? '/')
       hops += 1
@@ -140,7 +140,7 @@ const FAKE_HOST = 'www.tunnel.nyat.app:12345'
 
   record('重定向: 不存 cookie 的浏览器也必须有限次收敛（不会无限循环）', hops <= 3,
     `hops=${hops} ${seen.join(' | ')}`)
-  record('重定向: 补发 token 时下发防重复标记 natfrp_tok', sawMark)
+  record('重定向: 补发 token 时下发防重复标记 sshhost_tok', sawMark)
   record('重定向: 最终收敛为 200 而不是 303/401', lastStatus === 200, `last=${lastStatus}`)
 
   await proxy.close()
@@ -170,7 +170,7 @@ const FAKE_HOST = 'www.tunnel.nyat.app:12345'
     headers: { host: FAKE_HOST, accept: 'text/html',
       'content-type': 'application/x-www-form-urlencoded',
       'content-length': Buffer.byteLength(loginBody) } }, loginBody)
-  const gateCookie = pick(login, 'natfrp_gate')
+  const gateCookie = pick(login, 'sshhost_gate')
 
   // 旧端口留下的 cookie（签名对不上当前上游）
   const staleCookie = `${gateCookie}; dsh-auth-${'V'.repeat(43)}=v1.old.sig`
@@ -182,10 +182,10 @@ const FAKE_HOST = 'www.tunnel.nyat.app:12345'
     .some((c) => c.startsWith(`dsh-auth-${'V'.repeat(43)}=;`) && c.includes('Max-Age=0'))
   record('自愈: 上游 401 时主动清掉失效的 dsh-auth-*', clearsStale, `status=${r1.status}`)
   record('自愈: 用 303 重试而不是把 401 甩给浏览器', r1.status === 303, `status=${r1.status}`)
-  record('自愈: 记下 self-heal 计数 natfrp_heal', pick(r1, 'natfrp_heal') !== '')
+  record('自愈: 记下 self-heal 计数 sshhost_heal', pick(r1, 'sshhost_heal') !== '')
 
   // 第二次请求：已经自愈过一次，不得再清 → 直接透传 401（避免变成新循环）
-  const healedCookie = staleCookie + '; ' + pick(r1, 'natfrp_heal')
+  const healedCookie = staleCookie + '; ' + pick(r1, 'sshhost_heal')
   const r2 = await http(port, { path: '/', method: 'GET',
     headers: { host: FAKE_HOST, accept: 'text/html', cookie: healedCookie } })
   record('自愈: 只自愈一次，第二次透传 401（防新循环）', r2.status === 401,
@@ -214,23 +214,23 @@ const FAKE_HOST = 'www.tunnel.nyat.app:12345'
     headers: { host: FAKE_HOST, accept: 'text/html',
       'content-type': 'application/x-www-form-urlencoded',
       'content-length': Buffer.byteLength(loginBody) } }, loginBody)
-  const gateCookie = pick(login, 'natfrp_gate')
+  const gateCookie = pick(login, 'sshhost_gate')
 
   // 第一跳：补 token → 上游 303 并种下 dsh-auth-*
   const h1 = await http(port, { path: '/', method: 'GET',
     headers: { host: FAKE_HOST, accept: 'text/html', cookie: gateCookie } })
   const dshCookie = pick(h1, 'dsh-auth-' + 'Q'.repeat(43))
   record('正常: 首跳补 token 后上游返回 303', h1.status === 303, `status=${h1.status}`)
-  record('正常: 上游的 dsh-auth-* 与会话标记 cookie 并存', Boolean(dshCookie) && pick(h1, 'natfrp_tok') !== '',
-    `dsh=${Boolean(dshCookie)} mark=${pick(h1, 'natfrp_tok')}`)
+  record('正常: 上游的 dsh-auth-* 与会话标记 cookie 并存', Boolean(dshCookie) && pick(h1, 'sshhost_tok') !== '',
+    `dsh=${Boolean(dshCookie)} mark=${pick(h1, 'sshhost_tok')}`)
 
   // 第二跳：带着新 cookie 且带标记 → 不再补 token → 200
   const h2 = await http(port, { path: '/', method: 'GET',
     headers: { host: FAKE_HOST, accept: 'text/html',
-      cookie: `${gateCookie}; ${dshCookie}; ${pick(h1, 'natfrp_tok')}` } })
+      cookie: `${gateCookie}; ${dshCookie}; ${pick(h1, 'sshhost_tok')}` } })
   const seenUrl = String(h2.headers['x-seen-url'] ?? '')
   record('正常: 已有会话且已补过 → 不再补 token', !/[?&]token=/.test(seenUrl), `seen=${seenUrl}`)
-  record('正常: 最终 200 且注入 polyfill', h2.status === 200 && /data-natfrp-polyfill/.test(h2.body),
+  record('正常: 最终 200 且注入 polyfill', h2.status === 200 && /data-sshhost-polyfill/.test(h2.body),
     `status=${h2.status}`)
 
   await proxy.close()
