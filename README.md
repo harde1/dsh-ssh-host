@@ -190,9 +190,11 @@ POST /ssh-host/api/ssh/tunnel/remove
 
 ## 安全说明
 
-- **专用密钥对,密钥为主**:插件生成一把专用 ed25519 密钥(私钥 PKCS8 PEM,
-  OpenSSH 7.8+ 与 Termius 都能直接导入),不做账号密码引导;系统密码登录是 sshd
-  自带行为,插件不碰。
+- **专用密钥对,密钥为主**:插件生成一把专用 ed25519 密钥(私钥是 OpenSSH
+  `authkey` 格式,即 `BEGIN OPENSSH PRIVATE KEY`,Termius 可直接导入;0.1.0 之前
+  导出的 PKCS8 私钥会在插件加载时原地换封装——同一把密钥,公钥与
+  `~/.ssh/authorized_keys` 都不变,手机端只需重新导出一次),不做账号密码引导;
+  系统密码登录是 sshd 自带行为,插件不碰。
 - **私钥 0600,落插件数据目录,不入 state.json**:私钥/公钥落
   `~/.dsh/dsh-ssh-host/ssh-host-key(.pub)`,权限 0600,重启后从盘上恢复;
   state.json 里永远没有私钥(与 gatePassword 同纪律)。

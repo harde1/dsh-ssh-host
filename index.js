@@ -20,7 +20,7 @@ import { createFrpcManager } from './frpc.mjs'
 import { createPasswordGate, createGateServer } from './gate.mjs'
 import { installFrpc, checkInstalled, fetchClients, pickAsset, extractSakuraVersion, compareFrpcVersion } from './installer.mjs'
 import { resolveDshHome, resolveFrpcPath, displayPath } from './paths.mjs'
-import { checkSshd, generateHostKey, fingerprintOf as sshFingerprintOf, installPublicKey, buildConnectCommand, SSHD_PORT } from './ssh.mjs'
+import { checkSshd, generateHostKey, fingerprintOf as sshFingerprintOf, installPublicKey, buildConnectCommand, SSHD_PORT, toOpenSshPrivatePem, publicKeyFromPrivatePem } from './ssh.mjs'
 
 export const name = 'sshhost'
 export const inject = ['credentials', 'webServer', 'timer', 'connection']
@@ -192,10 +192,27 @@ export function apply(ctx, config = {}) {
   // 私钥注入目录:默认真实 ~/.ssh;测试可经 DSH_SSH_DIR 指到临时目录。
   const sshDir = String(process.env.DSH_SSH_DIR ?? '').trim() || join(homedir(), '.ssh')
   // 已生成的密钥从盘上恢复(私钥/公钥两个文件,均 0600),重启后 /key/private 仍可用。
+  // 旧版本把私钥存成 PKCS8(Termius 导入报 "Unsupported key type: PRIVATE KEY"),
+  // 这里就地换成 OpenSSH authkey 封装 —— 同一把密钥,公钥不变,
+  // authorized_keys 里的条目不用动,手机端只需重新导出一次。
   let hostKey = null
   try {
     const pk = safeRead(join(DATA_DIR, 'ssh-host-key'))
-    if (pk) hostKey = { privateKey: pk, publicKey: safeRead(join(DATA_DIR, 'ssh-host-key.pub')) }
+    if (pk) {
+      let privateKey = pk
+      if (pk.includes('BEGIN PRIVATE KEY')) {
+        privateKey = toOpenSshPrivatePem(pk)
+        writeFileSync(join(DATA_DIR, 'ssh-host-key'), privateKey, { mode: 0o600 })
+        logInfo('natfrp: 私钥已从 PKCS8 换封装为 OpenSSH 格式(同一把密钥)')
+      }
+      let publicKey = safeRead(join(DATA_DIR, 'ssh-host-key.pub'))
+      if (!publicKey) {
+        // 公钥文件丢了也要能出指纹:authkey 私钥里就内嵌着公钥 blob
+        publicKey = publicKeyFromPrivatePem(privateKey)
+        if (publicKey) writeFileSync(join(DATA_DIR, 'ssh-host-key.pub'), publicKey, { mode: 0o600 })
+      }
+      if (publicKey) hostKey = { privateKey, publicKey }
+    }
   } catch { /* 读不到就当没有 */ }
 
   /**
@@ -1635,9 +1652,54 @@ export function apply(ctx, config = {}) {
       const raw = await readBody(req)
       let body = {}
       try { body = JSON.parse(raw || '{}') } catch { /* 空 body 允许 */ }
-      // 节点:显式传 > 当前 DSH 隧道的节点(同节点,延迟一致)> 都没有就报错
+      // 节点(自动化前提:前端自动建隧道不传 node,这里必须能自己定):
+      //   显式传 > 当前 DSH 隧道在官方列表里的节点 > 列表首条隧道
+      //   > 缓存 lastTunnelInfo(仅官方列表拉不到时) > 可建节点排序第一 > 400。
+      // 官方列表拉到了就以它为准,连空列表也是权威:缓存里那条隧道的节点可能早被
+      // 面板改掉、或隧道已删除,拿它建 SSH 隧道会落到错的节点上。
       let node = Number(body.node) || null
-      if (!node && lastTunnelInfo) node = Number(lastTunnelInfo.node) || null
+      let listForNode = null
+      let listFetched = false
+      if (!node) {
+        try { listForNode = await api.tunnels(); listFetched = true } catch { listForNode = null }
+      }
+      if (listFetched && Array.isArray(listForNode)) {
+        const cur = listForNode.find((t) => String(t.id) === tunnelId)
+        node = Number(cur?.node) || Number(listForNode[0]?.node) || null
+        // 顺手刷新缓存,后续快照/状态路由看到的是同一个事实
+        if (cur) lastTunnelInfo = cur
+      } else if (!node && lastTunnelInfo) {
+        node = Number(lastTunnelInfo.node) || null
+      }
+      if (!node) {
+        // 一条隧道都没有(全新账号):挑「能建 → 内地优先 → 负载低 → id 稳定」的第一个节点。
+        // 负载要 /node/stats,那是可选信息 —— 拿不到就只按前两级与 id 排,不因此失败。
+        try {
+          const [all, stats] = await Promise.all([api.nodes(), api.nodeStats().catch(() => null)])
+          const loadOf = new Map()
+          for (const n of (stats?.nodes ?? [])) {
+            const id = Number(n?.id)
+            if (Number.isFinite(id)) loadOf.set(id, n)
+          }
+          const pick = Object.entries(all ?? {})
+            .map(([id, n]) => ({ id: Number(id), ...n }))
+            .filter((n) => Number.isFinite(n.id) && n.id > 0)
+            .filter((n) => (Number(n.flag) & (1 << 9)) === 0)
+            .filter((n) => !Number(n.vip))
+            .map((n) => ({
+              id: n.id,
+              mainland: (Number(n.flag) & (1 << 3)) !== 0,
+              createAllowed: (Number(n.flag) & 0b100) !== 0,
+              load: Number.isFinite(Number(loadOf.get(n.id)?.load)) ? Number(loadOf.get(n.id).load) : -1,
+            }))
+            // 能建的排前面 → 内地优先(延迟低)→ 负载低的优先 → id 稳定排序
+            .sort((a, b) => Number(b.createAllowed) - Number(a.createAllowed)
+              || Number(b.mainland) - Number(a.mainland)
+              || ((a.load < 0 ? 999 : a.load) - (b.load < 0 ? 999 : b.load))
+              || a.id - b.id)
+          node = pick[0]?.id ?? null
+        } catch { node = null }
+      }
       if (!node || !Number.isInteger(node) || node <= 0) {
         json(res, 400, {
           error: 'no-node',
@@ -1660,9 +1722,18 @@ export function apply(ctx, config = {}) {
           return true
         }
         sshTunnelId = String(id)
-        writeState({ sshTunnelId })
+        // 自动化:建好 SSH 隧道就把通道拉起来,不再要求用户多点一次「开启」。
+        // 只在创建成功这条路径上做(失败保持原状);用户之后手动关掉是明确意愿,
+        // 我们不会再替他打开。
+        if (!enabled) {
+          enabled = true
+          writeState({ enabled, sshTunnelId })
+          logInfo('natfrp: 已自动开启通道（SSH 隧道创建成功）')
+        } else {
+          writeState({ sshTunnelId })
+        }
         logInfo(`natfrp: SSH 隧道已创建 ${id} (node=${node}, local=127.0.0.1:${SSHD_PORT})`)
-        if (enabled) { frpc.stop(); void startAll('ssh tunnel created') }
+        frpc.stop(); void startAll('ssh tunnel created')
         json(res, 200, {
           ok: true,
           id,

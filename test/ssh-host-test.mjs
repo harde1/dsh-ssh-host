@@ -19,21 +19,27 @@
 //     frpc 桩用假可执行脚本观察 env NATFRP_TARGET（ESM 静态 import 无注入点，
 //     且 env 传播是 frpc.mjs:171 的真实链路，比 spy start 参数更端到端）。
 
-import { mkdtempSync, mkdirSync, statSync, readFileSync, writeFileSync, existsSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, statSync, readFileSync, writeFileSync, existsSync, rmSync } from 'node:fs'
 import { tmpdir, userInfo as osUserInfo, release as osRelease } from 'node:os'
 import { join, dirname } from 'node:path'
 import { createServer } from 'node:http'
+import { execFileSync } from 'node:child_process'
 import {
   buildOpenSshPublicKey, generateHostKey, fingerprintOf,
   installPublicKey, buildConnectCommand, parseSshdProbeResult,
-  checkSshd, setSshdProberForTests,
+  checkSshd, setSshdProberForTests, toOpenSshPrivatePem, publicKeyFromPrivatePem,
 } from '../ssh.mjs'
 
 const results = []
 const rec = (n, p, d = '') => { results.push(p); console.log(`${p ? 'PASS' : 'FAIL'}  ${n}${d ? ' — ' + d : ''}`) }
 const markerLines = (text) => text.split('\n').filter((l) => l.includes('dsh-ssh-host')).length
+// 给 ssh-keygen 落盘用的临时目录（只放测试自己生成的私钥，不碰 ~/.ssh）
+const homeForTest = mkdtempSync(join(tmpdir(), 'dsh-ssh-keygen-'))
 
-// ── 1) generateHostKey：OpenSSH ed25519 公钥行 + PKCS8 私钥，每次生成都是新的 ──
+// ── 1) generateHostKey：OpenSSH ed25519 公钥行 + OpenSSH authkey 私钥 ──
+// 私钥格式是真机反馈逼出来的:Termius 对 ed25519 只认
+// `BEGIN OPENSSH PRIVATE KEY`,PKCS8 的 `BEGIN PRIVATE KEY` 报
+// "Unsupported key type: PRIVATE KEY"(2026-11-12)。
 {
   const k = generateHostKey()
   const blob = Buffer.from(k.publicKey.split(/\s+/)[1], 'base64')
@@ -42,10 +48,27 @@ const markerLines = (text) => text.split('\n').filter((l) => l.includes('dsh-ssh
   rec('wire blob 长度 >= 51（4+11+4+32）', blob.length >= 51, `len=${blob.length}`)
   rec('blob 首段长度 11（ssh-ed25519）', blob.readUInt32BE(0) === 11, String(blob.readUInt32BE(0)))
   rec('blob 类型串是 ssh-ed25519', blob.subarray(4, 15).toString() === 'ssh-ed25519', blob.subarray(4, 15).toString())
-  rec('私钥是 PKCS8 PEM（node 原生导出）', k.privateKey.includes('BEGIN PRIVATE KEY'), k.privateKey.split('\n')[0])
-  rec('私钥不是 OpenSSH 新格式（Termius 也能导入）', !k.privateKey.includes('OPENSSH PRIVATE KEY'))
+  rec('私钥是 OpenSSH authkey 格式（Termius 可导入）',
+    k.privateKey.includes('BEGIN OPENSSH PRIVATE KEY'), k.privateKey.split('\n')[0])
+  rec('私钥不是 PKCS8（旧格式已被真机否掉）', !k.privateKey.includes('BEGIN PRIVATE KEY'))
+  // 权威判据:系统 ssh-keygen 能读这把私钥,并且推导出的公钥 == 我们的公钥行。
+  // 手工拼的 wire format 只要错一个字节,这里就红。
+  {
+    const f = join(homeForTest, `probe-${Math.random().toString(36).slice(2)}.key`)
+    writeFileSync(f, k.privateKey, { mode: 0o600 })
+    let derived = ''
+    try {
+      derived = execFileSync('ssh-keygen', ['-y', '-f', f], { encoding: 'utf8' }).trim()
+    } catch (e) { derived = `__SSH_KEYGEN_FAILED__ ${e?.message ?? e}` }
+    rec('ssh-keygen 能读该私钥（格式合法）', !derived.startsWith('__SSH_KEYGEN_FAILED__'), derived.slice(0, 40))
+    rec('ssh-keygen 推导的公钥与私钥内嵌 blob 一致（密钥对真的对应）',
+      derived === k.publicKey, `${derived.slice(0, 30)}… vs ${k.publicKey.slice(0, 30)}…`)
+    try { rmSync(f, { force: true }) } catch { /* noop */ }
+  }
   const k2 = generateHostKey()
   rec('每次生成都是新密钥', k.publicKey !== k2.publicKey)
+  rec('公钥文件丢失时能从私钥解出同一公钥（自愈）', publicKeyFromPrivatePem(k.privateKey) === k.publicKey)
+  rec('私钥换封装幂等', toOpenSshPrivatePem(k.privateKey) === k.privateKey)
 }
 
 // ── 2) fingerprintOf：RFC 4253/8336 风格 SHA256:<base64 无 padding> ──
@@ -197,6 +220,8 @@ rec('ETIMEDOUT → 未就绪', parseSshdProbeResult('ETIMEDOUT') === false)
   const realFetch = globalThis.fetch
   const apiCalls = []
   let tunnelsList = []
+  // 节点表桩：默认只给可创建的内地节点 2（原有断言依赖它);自动化用例可整体替换。
+  let nodesMap = { 2: { name: '内地节点', host: 'cn.natfrp.cloud', description: '', vip: 0, flag: 0b0100 | 0b1000 } }
   let apiTunnelsDown = false
   let deleteReply = null // null = 默认 { deleted: ids, failed: [] }
   let tunnelCreatePayload = null
@@ -212,7 +237,7 @@ rec('ETIMEDOUT → 未就绪', parseSshdProbeResult('ETIMEDOUT') === false)
       return jsonRes(tunnelsList)
     }
     if (u.pathname === '/v4/nodes') {
-      return jsonRes({ 2: { name: '内地节点', host: 'cn.natfrp.cloud', description: '', vip: 0, flag: 0b0100 | 0b1000 } })
+      return jsonRes(nodesMap)
     }
     if (u.pathname === '/v4/tunnels' && method === 'POST') {
       tunnelCreatePayload = body
@@ -474,7 +499,42 @@ rec('ETIMEDOUT → 未就绪', parseSshdProbeResult('ETIMEDOUT') === false)
     rec('remove 重试成功 → 200 且清空', removedOk.status === 200
       && String((await getJSON(B, '/ssh-host/api/state')).body?.sshTunnelId) === '')
 
-    // ── (d) 私钥路由：未生成 404 → 生成 → 返回 PKCS8 PEM；重新生成 → upsert replaced ──
+    // ── 自动化：节点三级回退(前端自动建隧道不传 node,这三档是零操作的前提)──
+    {
+      // 档 2:lastTunnelInfo 失效(config 切到不存在隧道),tunnelsList 首条 node=5
+      const cfgOff = await postJSON(B, '/ssh-host/api/config', { tunnelId: 'nope' })
+      rec('自动化前置：切到不存在隧道 → 200', cfgOff.status === 200, `status=${cfgOff.status}`)
+      tunnelsList = [{ id: 90001, name: 'DSH', node: 5, type: 'tcp', local_ip: '127.0.0.1', local_port: -1, online: true, remote: 41234 }]
+      setSshdProberForTests(async () => true)
+      const autoNode = await postJSON(B, '/ssh-host/api/ssh/tunnel/create', {})
+      rec('自动化:无 lastTunnelInfo → 官方隧道列表首条 node=5',
+        autoNode.status === 200 && Number(tunnelCreatePayload?.node) === 5,
+        `status=${autoNode.status} node=${tunnelCreatePayload?.node}`)
+      await postJSON(B, '/ssh-host/api/ssh/tunnel/remove')
+
+      // 档 3:隧道列表也空 → 可建节点排序第一(桩 nodesMap 的 2)
+      tunnelsList = []
+      const autoNode2 = await postJSON(B, '/ssh-host/api/ssh/tunnel/create', {})
+      rec('自动化:无隧道可参照 → 可建节点排序第一 node=2',
+        autoNode2.status === 200 && Number(tunnelCreatePayload?.node) === 2,
+        `status=${autoNode2.status} node=${tunnelCreatePayload?.node}`)
+      await postJSON(B, '/ssh-host/api/ssh/tunnel/remove')
+
+      // 三级全空 → 400 no-node
+      tunnelsList = []
+      const savedNodes = nodesMap
+      nodesMap = {}
+      const autoNode3 = await postJSON(B, '/ssh-host/api/ssh/tunnel/create', {})
+      rec('自动化:三级全空 → 400 no-node',
+        autoNode3.status === 400 && autoNode3.body?.error === 'no-node',
+        `status=${autoNode3.status} body=${JSON.stringify(autoNode3.body)}`)
+      nodesMap = savedNodes
+      setSshdProberForTests(null)
+      tunnelsList = [{ id: 90001, name: 'DSH', node: 2, type: 'tcp', local_ip: '127.0.0.1', local_port: -1, online: true, remote: 41234 }]
+    }
+
+    // ── (d) 私钥路由：未生成 404 → 生成 → 返回 OpenSSH authkey PEM；重新生成 → upsert replaced ──
+    // 格式选择来自真机反馈:Termius 导入 PKCS8 报 "Unsupported key type: PRIVATE KEY"。
     const noKey = await getJSON(B, '/ssh-host/api/ssh/key/private')
     rec('(d) 未生成密钥时 /key/private → 404 no-key',
       noKey.status === 404 && noKey.body?.error === 'no-key',
@@ -486,9 +546,11 @@ rec('ETIMEDOUT → 未就绪', parseSshdProbeResult('ETIMEDOUT') === false)
       /^SHA256:/.test(String(mk1.body?.fingerprint)) && String(mk1.body?.file).endsWith('authorized_keys'),
       JSON.stringify({ fp: mk1.body?.fingerprint, file: mk1.body?.file }))
     const priv1 = await getJSON(B, '/ssh-host/api/ssh/key/private')
-    rec('(d) 生成后 /key/private → 200 且是 PKCS8 PEM',
-      priv1.status === 200 && String(priv1.body?.privateKey).includes('BEGIN PRIVATE KEY'),
-      `status=${priv1.status}`)
+    rec('(d) 生成后 /key/private → 200 且是 OpenSSH authkey PEM（Termius 可导入）',
+      priv1.status === 200 && String(priv1.body?.privateKey).includes('BEGIN OPENSSH PRIVATE KEY'),
+      `status=${priv1.status} head=${String(priv1.body?.privateKey).split('\n')[0]}`)
+    rec('(d) /key/private 不再是 PKCS8（旧格式被真机否掉）',
+      !String(priv1.body?.privateKey).includes('BEGIN PRIVATE KEY'))
     rec('(d) /key/private 带公钥行与指纹',
       String(priv1.body?.publicKey).startsWith('ssh-ed25519 ') && /^SHA256:/.test(String(priv1.body?.fingerprint)))
     rec('(d) 指纹与公钥一致（同一把密钥算出来的）', priv1.body?.fingerprint === mk1.body?.fingerprint)
@@ -523,6 +585,85 @@ rec('ETIMEDOUT → 未就绪', parseSshdProbeResult('ETIMEDOUT') === false)
 
     await srvB.close()
   })
+
+  // ── 自动化 2：建完 SSH 隧道自动拉起通道（用户不该再点一次「开启」）──
+  // 另开一台 box：这里要观察 frpc 真被 startAll 拉起，必须挂假 frpc 脚本与本机端口
+  // （上面那台是 enabled:false 且没配 frpcPath，起不来）。
+  {
+    const f = fakeFrpc()
+    const GP9 = await freePort()
+    setSshdProberForTests(async () => true)
+    await withApply(
+      { enabled: false, tunnelId: '90001', gatePort: GP9 },
+      { enabled: false, tunnelId: '90001', gatePort: GP9, frpcPath: f.path, autoAlign: false },
+      async (box) => {
+        const srvA2 = await serve(box)
+        const created = await postJSON(srvA2.base, '/ssh-host/api/ssh/tunnel/create', {})
+        rec('自动化2：建隧道 → 200（enabled 原本为 false）',
+          created.status === 200 && created.body?.id, `status=${created.status}`)
+        const wantTarget = `90001,${created.body?.id}`
+        const got = await waitFor(() => {
+          const t = readTarget(f.targetFile)
+          return t === wantTarget ? t : null
+        })
+        rec('自动化2：建完自动拉起 frpc，NATFRP_TARGET 含两条隧道',
+          got === wantTarget, `target=${got ?? readTarget(f.targetFile)}`)
+        const st = await getJSON(srvA2.base, '/ssh-host/api/state')
+        rec('自动化2：state.enabled 自动置 true',
+          st.body?.enabled === true, `enabled=${st.body?.enabled}`)
+        const stateOnDisk = JSON.parse(readFileSync(join(home, 'dsh-ssh-host', 'state.json'), 'utf8'))
+        rec('自动化2：state.json 里 enabled=true（重启后仍是开的）',
+          stateOnDisk.enabled === true, JSON.stringify(stateOnDisk.enabled))
+        await srvA2.close()
+      })
+    setSshdProberForTests(null)
+  }
+
+  // ── (f) 旧盘上 PKCS8 私钥的自愈：真机反馈 Termius 拒收 PKCS8，
+  //          已生成过密钥的用户盘上就是 PKCS8，重新加载必须原地换封装，
+  //          且公钥/authorized_keys 都不许动（换公钥等于让用户重连一次）。
+  {
+    const { generateKeyPairSync } = await import('node:crypto')
+    const { privateKey, publicKey } = generateKeyPairSync('ed25519')
+    const pkcs8 = privateKey.export({ type: 'pkcs8', format: 'pem' }).toString()
+    const spki = publicKey.export({ type: 'spki', format: 'der' })
+    const pubLine = buildOpenSshPublicKey(spki.subarray(spki.length - 32))
+    const keyFile = join(home, 'dsh-ssh-host', 'ssh-host-key')
+    const pubFile = keyFile + '.pub'
+    const akPath = join(sshDirTmp, 'authorized_keys')
+    writeFileSync(keyFile, pkcs8, { mode: 0o600 })
+    writeFileSync(pubFile, pubLine, { mode: 0o600 })
+    // authorized_keys 里放这条公钥 + 用户自己的条目
+    writeFileSync(akPath, `${userLine}\n${pubLine}\n`, { mode: 0o600 })
+    const akBefore = readFileSync(akPath, 'utf8')
+
+    await withApply({ enabled: false }, { gatePort: await freePort(), autoAlign: false }, async (box) => {
+      const srvF = await serve(box)
+      const priv = await getJSON(srvF.base, '/ssh-host/api/ssh/key/private')
+      rec('(f) 旧 PKCS8 私钥在加载后换封装为 OpenSSH authkey',
+        priv.status === 200 && String(priv.body?.privateKey).includes('BEGIN OPENSSH PRIVATE KEY'),
+        `status=${priv.status} head=${String(priv.body?.privateKey).split('\n')[0]}`)
+      rec('(f) 换封装不动公钥（authorized_keys 无需重写，用户不必重连）',
+        String(priv.body?.publicKey).trim() === pubLine,
+        `${String(priv.body?.publicKey).slice(0, 30)}… vs ${pubLine.slice(0, 30)}…`)
+      rec('(f) 盘上私钥文件已被就地改写为 authkey',
+        readFileSync(keyFile, 'utf8').includes('BEGIN OPENSSH PRIVATE KEY'))
+      rec('(f) authorized_keys 一个字节都没动', readFileSync(akPath, 'utf8') === akBefore)
+      rec('(f) 指纹与公钥行自洽', priv.body?.fingerprint === fingerprintOf(pubLine),
+        String(priv.body?.fingerprint))
+      await srvF.close()
+    })
+
+    // 自愈后再加载一次必须稳态：不重复改写、不改公钥、不报错
+    await withApply({ enabled: false }, { gatePort: await freePort(), autoAlign: false }, async (box) => {
+      const srvG = await serve(box)
+      const again = await getJSON(srvG.base, '/ssh-host/api/ssh/key/private')
+      rec('(f) 二次加载幂等（仍是同一把密钥，authorized_keys 未动）',
+        again.body?.publicKey === pubLine && readFileSync(akPath, 'utf8') === akBefore,
+        `fp=${String(again.body?.fingerprint)}`)
+      await srvG.close()
+    })
+  }
 
   // ── 清场：关测试服务器、恢复 fetch、清 env（disposers 已在 withApply 里跑完，
   //          假 frpc 常驻进程随之被杀）──

@@ -2163,7 +2163,7 @@ body[data-sshhost-mode="narrow"] button[aria-label="SSH 主机"] > .sshhost-swit
         setBusy('tunnel'); setMsg('')
         try {
           const r = await post('/ssh/tunnel/create', {})
-          setMsg(r.warning ? `⚠ ${r.warning}` : '✓ SSH 隧道已创建,等 frpc 重连后生效')
+          setMsg(r.warning ? `⚠ ${r.warning}` : '✓ SSH 隧道已创建,通道已自动开启,等 frpc 连上即可')
           void load()   // 立即刷新隧道摘要,不等 8s 轮询
         } catch (e) { setMsg(`创建失败:${e.message}`) }
         finally { setBusy('') }
