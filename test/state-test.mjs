@@ -1,80 +1,125 @@
-// state-test.mjs — 状态目录迁移 + dismiss 持久化（端到端，用临时 DSH_HOME）
-const results = []
-const rec = (n, p, d = '') => { results.push(p); console.log(`${p ? 'PASS' : 'FAIL'}  ${n}${d ? ' — ' + d : ''}`) }
+// state-test.mjs — 数据目录迁移(测 index.js 的真实 migrateLegacyDataDir) + dismiss 持久化
+//
+// 迁移为什么不能内联复刻:迁移逻辑长在 index.js 里,复制一份进测试只会验证「副本对副本」。
+// 真实实现的迁移在模块加载期执行,且 DATA_DIR / LEGACY_DATA_DIRS 等常量基于 import 时的
+// DSH_HOME 求值 —— 所以这里沿用 apply-test.mjs / credential-token-test.mjs 的手法:
+// mkdtemp 临时目录 → 造 legacy 目录 → 设 process.env.DSH_HOME → 动态 import('../index.js?…')。
+// 每个场景用不同的 query 拿一份新的 index.js 模块实例(同进程缓存会挡住第二次求值),
+// 模块体里的 migrateLegacyDataDir() 就会对着当时的 DSH_HOME 跑一次。
+//
+// 迁移链(与 index.js 的 LEGACY_DATA_DIRS 一致):dsh-natfrp → dsh-sakurafrp → dsh-ssh-host。
 
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync, existsSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync, existsSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import { execFileSync } from 'node:child_process'
 
-const sandbox = mkdtempSync(join(tmpdir(), 'state-test-'))
-const oldDir = join(sandbox, 'dsh-natfrp')
-const newDir = join(sandbox, 'dsh-ssh-host')
+const results = []
+const rec = (n, p, d = '') => { results.push(p); console.log(`${p ? 'PASS' : 'FAIL'}  ${n}${d ? ' — ' + d : ''}`) }
+const readFileIf = (p) => existsSync(p) ? readFileSync(p, 'utf8') : null
 
-// ── 造一份旧状态 ──
-mkdirSync(oldDir, { recursive: true })
-writeFileSync(join(oldDir, 'state.json'), JSON.stringify({
+// ── 场景 ①:单级 dsh-sakurafrp,三件套(state.json / gate-password.txt / token.txt) ──
+const homeA = mkdtempSync(join(tmpdir(), 'state-test-a-'))
+const sakuraA = join(homeA, 'dsh-sakurafrp')
+const newDir = join(homeA, 'dsh-ssh-host') // 供下方 writeState 合并段沿用
+mkdirSync(sakuraA, { recursive: true })
+const sakuraStateA = JSON.stringify({
   enabled: true,
-  tunnelId: '12345',
+  tunnelId: '54321',
   gatePort: 3083,
-  gatePassword: 'secret-pass',
+  gatePassword: 'legacy-pass',
   dismissedFrpcPrompts: [],
-}, null, 2))
-writeFileSync(join(oldDir, 'gate-password.txt'), 'secret-pass')
+}, null, 2)
+writeFileSync(join(sakuraA, 'state.json'), sakuraStateA)
+writeFileSync(join(sakuraA, 'gate-password.txt'), 'legacy-pass')
+writeFileSync(join(sakuraA, 'token.txt'), 'token-abc')
 
-// ── 跑迁移函数（从 index.js 里抽出来执行，不启动整个插件）──
-const script = `
-import { existsSync, mkdirSync, readFileSync, writeFileSync, rmdirSync } from 'node:fs'
-import { join } from 'node:path'
-const DSH_HOME = ${JSON.stringify(sandbox)}
-const DATA_DIR = join(DSH_HOME, 'dsh-ssh-host')
-const LEGACY_DATA_DIR = join(DSH_HOME, 'dsh-natfrp')
-const STATE_PATH = join(DATA_DIR, 'state.json')
+process.env.DSH_HOME = homeA
+await import('../index.js?state-mig-a')
 
-function migrateLegacyDataDir() {
-  try {
-    if (existsSync(STATE_PATH)) return
-    if (!existsSync(LEGACY_DATA_DIR)) return
-    let copied = 0
-    mkdirSync(DATA_DIR, { recursive: true })
-    for (const file of ['state.json', 'gate-password.txt']) {
-      const from = join(LEGACY_DATA_DIR, file)
-      if (!existsSync(from)) continue
-      try {
-        writeFileSync(join(DATA_DIR, file), readFileSync(from), { mode: 0o600 })
-        copied += 1
-      } catch {}
-    }
-    if (copied === 0) { try { rmdirSync(DATA_DIR) } catch {} }
-  } catch {}
-}
-migrateLegacyDataDir()
-console.log('migrated')
-`
-const scriptPath = join(sandbox, 'mig.mjs')
-writeFileSync(scriptPath, script)
-execFileSync(process.execPath, [scriptPath], { stdio: 'pipe' })
-
-// ── 断言迁移结果 ──
-rec('新目录已创建', existsSync(newDir))
-rec('state.json 已迁移', existsSync(join(newDir, 'state.json')))
-rec('gate-password.txt 已迁移', existsSync(join(newDir, 'gate-password.txt')))
-
+rec('① 新目录已创建', existsSync(newDir))
+rec('① state.json 已迁移', existsSync(join(newDir, 'state.json')))
 if (existsSync(join(newDir, 'state.json'))) {
   const st = JSON.parse(readFileSync(join(newDir, 'state.json'), 'utf8'))
-  rec('enabled 保留', st.enabled === true)
-  rec('tunnelId 保留', st.tunnelId === '12345')
-  rec('gatePassword 保留（关键：不能丢）', st.gatePassword === 'secret-pass')
+  rec('① enabled 保留', st.enabled === true)
+  rec('① tunnelId 保留', st.tunnelId === '54321')
+  rec('① gatePassword 保留(关键:不能丢)', st.gatePassword === 'legacy-pass')
 }
-rec('旧目录未被破坏（关键：不影响旧包）', existsSync(join(oldDir, 'state.json')))
+rec('① gate-password.txt 已迁移', readFileIf(join(newDir, 'gate-password.txt')) === 'legacy-pass')
+rec('① token.txt 已迁移(上游 2.3.2+ 的回退 token 文件)', readFileIf(join(newDir, 'token.txt')) === 'token-abc')
+rec('① 迁移文件权限 0600', (() => {
+  const p = join(newDir, 'state.json')
+  if (!existsSync(p)) return false // state.json 没迁过来,权限无从谈起(失败由上一条表达)
+  return process.platform === 'win32' || (statSync(p).mode & 0o777) === 0o600
+})())
+rec(
+  '① 旧目录原样保留(复制不搬走,关键:不影响旧包)',
+  readFileIf(join(sakuraA, 'state.json')) === sakuraStateA
+  && readFileIf(join(sakuraA, 'gate-password.txt')) === 'legacy-pass'
+  && readFileIf(join(sakuraA, 'token.txt')) === 'token-abc',
+)
 
-// ── 二次运行不应覆盖新状态 ──
+// ── 二次运行不应覆盖新状态(STATE_PATH 已存在 → 整个迁移早退) ──
 writeFileSync(join(newDir, 'state.json'), JSON.stringify({ enabled: false, marker: 'newer' }))
-execFileSync(process.execPath, [scriptPath], { stdio: 'pipe' })
-{
-  const st = JSON.parse(readFileSync(join(newDir, 'state.json'), 'utf8'))
-  rec('二次迁移不覆盖已存在的新状态', st.marker === 'newer')
-}
+await import('../index.js?state-mig-a2')
+rec('二次迁移不覆盖已存在的新状态', JSON.parse(readFileSync(join(newDir, 'state.json'), 'utf8')).marker === 'newer')
+
+// ── 场景 ②:两级并存(dsh-natfrp + dsh-sakurafrp)——dsh-sakurafrp 的 state.json 优先,
+//    dsh-natfrp 独有的文件仍被合并 ──
+const homeB = mkdtempSync(join(tmpdir(), 'state-test-b-'))
+const natB = join(homeB, 'dsh-natfrp')
+const sakuraB = join(homeB, 'dsh-sakurafrp')
+const newDirB = join(homeB, 'dsh-ssh-host')
+mkdirSync(natB, { recursive: true })
+mkdirSync(sakuraB, { recursive: true })
+const natStateB = JSON.stringify({ tunnelId: '111', gatePassword: 'old-pass' })
+const sakuraStateB = JSON.stringify({ tunnelId: '222', gatePassword: 'new-pass' })
+writeFileSync(join(natB, 'state.json'), natStateB)
+writeFileSync(join(natB, 'gate-password.txt'), 'old-pass')
+writeFileSync(join(natB, 'token.txt'), 'old-token')
+writeFileSync(join(sakuraB, 'state.json'), sakuraStateB)
+writeFileSync(join(sakuraB, 'gate-password.txt'), 'new-pass')
+
+process.env.DSH_HOME = homeB
+await import('../index.js?state-mig-b')
+
+rec(
+  '② 两级并存:dsh-sakurafrp 的 state.json 优先(tunnelId=222)',
+  JSON.parse(readFileIf(join(newDirB, 'state.json')) ?? '{}').tunnelId === '222',
+)
+rec('② 两级并存:dsh-sakurafrp 的 gate-password.txt 覆盖旧值', readFileIf(join(newDirB, 'gate-password.txt')) === 'new-pass')
+rec('② 两级并存:dsh-natfrp 独有的 token.txt 仍被合并', readFileIf(join(newDirB, 'token.txt')) === 'old-token')
+rec(
+  '② 两级旧目录都原样保留',
+  readFileIf(join(natB, 'state.json')) === natStateB
+  && readFileIf(join(sakuraB, 'state.json')) === sakuraStateB
+  && readFileIf(join(natB, 'token.txt')) === 'old-token',
+)
+
+// ── 场景 ④:新目录已有 state.json —— 不动(连旧目录的其它文件也不搬) ──
+const homeC = mkdtempSync(join(tmpdir(), 'state-test-c-'))
+const natC = join(homeC, 'dsh-natfrp')
+const newDirC = join(homeC, 'dsh-ssh-host')
+mkdirSync(natC, { recursive: true })
+mkdirSync(newDirC, { recursive: true })
+writeFileSync(join(newDirC, 'state.json'), JSON.stringify({ marker: 'already-mine' }))
+writeFileSync(join(natC, 'state.json'), JSON.stringify({ tunnelId: '999' }))
+writeFileSync(join(natC, 'gate-password.txt'), 'old-pass')
+
+process.env.DSH_HOME = homeC
+await import('../index.js?state-mig-c')
+
+rec('③ 新目录已有 state.json 时不动', JSON.parse(readFileSync(join(newDirC, 'state.json'), 'utf8')).marker === 'already-mine')
+rec('③ 早退后不搬任何文件(旧 gate-password.txt 不出现在新目录)', !existsSync(join(newDirC, 'gate-password.txt')))
+rec('③ 旧目录原样保留', readFileIf(join(natC, 'state.json')) === JSON.stringify({ tunnelId: '999' }))
+
+// ── 场景 ④:无 legacy —— 不留空目录(mkdir 后 copied=0 会 rmdir 掉) ──
+const homeD = mkdtempSync(join(tmpdir(), 'state-test-d-'))
+const newDirD = join(homeD, 'dsh-ssh-host')
+
+process.env.DSH_HOME = homeD
+await import('../index.js?state-mig-d')
+
+rec('④ 无 legacy 时不留空目录', !existsSync(newDirD))
 
 // ── writeState 合并语义 ──
 function makeWriteState(statePath) {
@@ -99,7 +144,7 @@ function makeWriteState(statePath) {
   rec('合并写入添加 dismiss 记录', Array.isArray(st.dismissedFrpcPrompts) && st.dismissedFrpcPrompts.length === 1)
 }
 
-rmSync(sandbox, { recursive: true, force: true })
+for (const home of [homeA, homeB, homeC, homeD]) rmSync(home, { recursive: true, force: true })
 
 const ok = results.every(Boolean)
 console.log(`\n${results.filter(Boolean).length}/${results.length} passed`)
