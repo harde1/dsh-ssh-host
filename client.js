@@ -2,13 +2,13 @@ window.__ModuleLoader__.load({
   // ⚠️ 必须与 package.json 的 name 完全一致：DSH 的浏览器端模块身份 = 解析出的包名，
   //    写成别的值（如旧的 @local/dsh-natfrp）会让宿主在 boot 时抛
   //    `loaded without registering "<包名>"`，插件 UI 整半侧加载失败。
-  id: 'dsh-sakurafrp',
+  id: 'dsh-ssh-host',
   factory(require) {
     const React = require('react')
     const h = React.createElement
     const { useState, useEffect, useCallback, useRef } = React
 
-    const API = '/natfrp/api'
+    const API = '/ssh-host/api'
 
     /** 宿主 ctx，由 apply(ctx) 注入；用于取宿主服务（sidebarRight / webServer）。 */
     let hostCtx = null
@@ -371,7 +371,7 @@ window.__ModuleLoader__.load({
         // 用惰性调用（syncAllSwitches 定义在后面，运行时已就绪）。
         try {
           if (typeof document !== 'undefined' && document.body) {
-            const rows = document.querySelectorAll('button[aria-label="内网穿透"]')
+            const rows = document.querySelectorAll('button[aria-label="SSH 主机"]')
             for (const row of rows) {
               if (!row.querySelector('.natfrp-switch')) {
                 ensureSwitchNode(row)
@@ -751,7 +751,7 @@ window.__ModuleLoader__.load({
         h('div', { style: S.hint },
           present
             ? `本地文件存在但不正确：${presence.error || '版本不符'}`
-            : '内网穿透需要 SakuraFrp 官方 frpc。点下面的按钮自动下载并安装到本机，无需手动操作。'),
+            : 'SSH 主机需要 SakuraFrp 官方 frpc。点下面的按钮自动下载并安装到本机，无需手动操作。'),
 
         h('div', { style: { ...S.hint, fontSize: '11px', opacity: 0.75, wordBreak: 'break-all' } },
           `安装位置：${shownPath}`,
@@ -860,7 +860,7 @@ window.__ModuleLoader__.load({
     //
     // 读失败一律退回 true（默认展开）：很多问题只有日志里有答案，
     // 隐私模式 / 存储被禁时不能因此让日志消失。
-    const LOGS_OPEN_KEY = 'dsh-sakurafrp:logsOpen'
+    const LOGS_OPEN_KEY = 'dsh-ssh-host:logsOpen'
 
     function readLogsOpenPref() {
       try {
@@ -1419,11 +1419,11 @@ window.__ModuleLoader__.load({
             // 原来挂在标题下的那句说明，收进悬停提示：信息还在，但不占一行
             title: '关闭后立即断开公网连接，DSH 重启也不再连；本机端口与密码设置都会保留。',
           },
-            h('div', { style: S.label }, '内网穿透'),
+            h('div', { style: S.label }, 'SSH 主机'),
             st.version
               ? h('span', {
                 style: { ...S.hint, marginTop: 0, fontSize: '11px', opacity: 0.65 },
-                title: `dsh-sakurafrp ${st.version}`,
+                title: `dsh-ssh-host ${st.version}`,
               }, `v${st.version}`)
               : null,
             h('span', { style: S.badge(frpc.running) },
@@ -1923,14 +1923,14 @@ window.__ModuleLoader__.load({
     // 因此状态点分两处呈现：
     //   · 展开模式：图标不画点，由 CSS 注入的 ::after 画在「文字右侧」（占半个字高）
     //   · 折叠模式：没有文字，把点画在 SVG 内部右上角
-    const SIDEBAR_CSS_ID = 'dsh-sakurafrp/sidebar-dot.css'
+    const SIDEBAR_CSS_ID = 'dsh-ssh-host/sidebar-dot.css'
 
     function ensureSidebarCss() {
       if (typeof document === 'undefined') return
       if (document.querySelector(`style[data-plugin-css="${SIDEBAR_CSS_ID}"]`) !== null) return
       const css = `
 /* 定位方式不依赖 DSH 的构建哈希类名（前缀随版本变）：
-   本插件那一行的 aria-label 固定为「内网穿透」。
+   本插件那一行的 aria-label 固定为「SSH 主机」。
    状态写在 body 上（React 重渲染不会冲掉），ARIA 只用于定位行。
 
    行是 flex + align-items:center + line-height:22px，故伪元素与注入按钮
@@ -1939,7 +1939,7 @@ window.__ModuleLoader__.load({
    ── 状态点（只读指示）──
    绿 = 已连接，黄 = 未连接，红 = 故障。
    点本身不可点（避免误触断线）——可点的是右侧开关。 */
-button[aria-label="内网穿透"]::after {
+button[aria-label="SSH 主机"]::after {
   content: '';
   flex: none;
   order: 1;
@@ -1950,19 +1950,19 @@ button[aria-label="内网穿透"]::after {
   background: #eab308;
   transition: background .2s ease;
 }
-body[data-natfrp-mode="narrow"] button[aria-label="内网穿透"]::after {
+body[data-natfrp-mode="narrow"] button[aria-label="SSH 主机"]::after {
   content: none;  /* 折叠模式：点画在图标内嵌位置 */
 }
-body[data-natfrp-state="green"] button[aria-label="内网穿透"]::after {
+body[data-natfrp-state="green"] button[aria-label="SSH 主机"]::after {
   background: #22c55e;
 }
-body[data-natfrp-state="red"] button[aria-label="内网穿透"]::after {
+body[data-natfrp-state="red"] button[aria-label="SSH 主机"]::after {
   background: #ef4444;
 }
 
 /* ── 开关（可点，红/绿表示开/关）──
    由组件动态插入为行的最后一个子元素；order:2 保证排在状态点右侧。 */
-button[aria-label="内网穿透"] > .natfrp-switch {
+button[aria-label="SSH 主机"] > .natfrp-switch {
   order: 2;
   flex: none;
   position: relative;
@@ -1976,10 +1976,10 @@ button[aria-label="内网穿透"] > .natfrp-switch {
   background: #ef4444;   /* 关（默认安全色） */
   transition: background .18s ease, opacity .18s ease;
 }
-button[aria-label="内网穿透"] > .natfrp-switch[data-on="true"] {
+button[aria-label="SSH 主机"] > .natfrp-switch[data-on="true"] {
   background: #22c55e;   /* 开 */
 }
-button[aria-label="内网穿透"] > .natfrp-switch::before {
+button[aria-label="SSH 主机"] > .natfrp-switch::before {
   content: '';
   position: absolute;
   top: 2px;
@@ -1991,19 +1991,19 @@ button[aria-label="内网穿透"] > .natfrp-switch::before {
   box-shadow: 0 1px 2px rgba(0,0,0,.25);
   transition: transform .18s ease;
 }
-button[aria-label="内网穿透"] > .natfrp-switch[data-on="true"]::before {
+button[aria-label="SSH 主机"] > .natfrp-switch[data-on="true"]::before {
   transform: translateX(12px);
 }
-button[aria-label="内网穿透"] > .natfrp-switch[data-busy="true"] {
+button[aria-label="SSH 主机"] > .natfrp-switch[data-busy="true"] {
   opacity: .55;
   cursor: progress;
 }
-body[data-natfrp-mode="narrow"] button[aria-label="内网穿透"] > .natfrp-switch {
+body[data-natfrp-mode="narrow"] button[aria-label="SSH 主机"] > .natfrp-switch {
   display: none;  /* 折叠模式空间不足，只在展开时提供开关 */
 }
 `.trim()
       const tag = document.createElement('style')
-      tag.dataset.plugin = 'dsh-sakurafrp'
+      tag.dataset.plugin = 'dsh-ssh-host'
       tag.dataset.pluginCss = SIDEBAR_CSS_ID
       tag.textContent = css
       document.head.appendChild(tag)
@@ -2029,7 +2029,7 @@ body[data-natfrp-mode="narrow"] button[aria-label="内网穿透"] > .natfrp-swit
 
     function findRow() {
       if (typeof document === 'undefined') return null
-      return document.querySelector('button[aria-label="内网穿透"]')
+      return document.querySelector('button[aria-label="SSH 主机"]')
     }
 
     /**
@@ -2041,7 +2041,7 @@ body[data-natfrp-mode="narrow"] button[aria-label="内网穿透"] > .natfrp-swit
     function syncAllSwitches() {
       if (typeof document === 'undefined') return
       const enabled = diagStore.getEnabled()
-      const rows = document.querySelectorAll('button[aria-label="内网穿透"]')
+      const rows = document.querySelectorAll('button[aria-label="SSH 主机"]')
       for (const row of rows) syncSwitch(row, enabled)
     }
 
@@ -2052,8 +2052,8 @@ body[data-natfrp-mode="narrow"] button[aria-label="内网穿透"] > .natfrp-swit
       node = document.createElement('button')
       node.type = 'button'
       node.className = SWITCH_CLASS
-      node.title = '开启 / 关闭内网穿透'
-      node.setAttribute('aria-label', '切换内网穿透')
+      node.title = '开启 / 关闭 SSH 主机'
+      node.setAttribute('aria-label', '切换 SSH 主机')
       node.addEventListener('click', (e) => {
         e.preventDefault()
         e.stopPropagation()
@@ -2231,7 +2231,7 @@ body[data-natfrp-mode="narrow"] button[aria-label="内网穿透"] > .natfrp-swit
             name: 'sidebar.panellist',
             id: NATFRP_PANEL_KEY,
             order: NATFRP_SIDEBAR_ORDER,
-            label: '内网穿透',
+            label: 'SSH 主机',
           }, NatfrpSidebarIcon)
           return () => {
             try { stop?.() } catch { /* noop */ }
@@ -2247,7 +2247,7 @@ body[data-natfrp-mode="narrow"] button[aria-label="内网穿透"] > .natfrp-swit
           name: 'settings.section',
           id: 'natfrp',
           order: 61,
-          label: '内网穿透 (SakuraFrp)',
+          label: 'SSH 主机',
         }, Panel))
       },
     }
