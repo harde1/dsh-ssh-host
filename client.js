@@ -2122,18 +2122,19 @@ body[data-sshhost-mode="narrow"] button[aria-label="SSH 主机"] > .sshhost-swit
       const [privKey, setPrivKey] = useState('')
       const mounted = useRef(true)
 
+      const load = useCallback(async () => {
+        try {
+          const s = await getJSON('/ssh/state')
+          if (mounted.current) setSsh(s)
+        } catch { /* 拉不到就保持上一份快照,不闪错误条 */ }
+      }, [])
+
       useEffect(() => {
         mounted.current = true
-        const load = async () => {
-          try {
-            const s = await getJSON('/ssh/state')
-            if (mounted.current) setSsh(s)
-          } catch { /* 拉不到就保持上一份快照,不闪错误条 */ }
-        }
         void load()
         const t = setInterval(() => void load(), 8000)
         return () => { mounted.current = false; clearInterval(t) }
-      }, [])
+      }, [load])
 
       if (!ssh) return null   // 首次加载不占位,避免闪一块空卡
 
@@ -2153,6 +2154,7 @@ body[data-sshhost-mode="narrow"] button[aria-label="SSH 主机"] > .sshhost-swit
         try {
           const r = await post('/ssh/key/create')
           setMsg(KEY_MSG[r.action] ?? `✓ 密钥已就绪(${r.action ?? '未知结果'})`)
+          void load()   // 立即刷新密钥摘要/四态,不等 8s 轮询
         } catch (e) { setMsg(`密钥生成失败:${e.message}`) }
         finally { setBusy('') }
       }
@@ -2162,6 +2164,7 @@ body[data-sshhost-mode="narrow"] button[aria-label="SSH 主机"] > .sshhost-swit
         try {
           const r = await post('/ssh/tunnel/create', {})
           setMsg(r.warning ? `⚠ ${r.warning}` : '✓ SSH 隧道已创建,等 frpc 重连后生效')
+          void load()   // 立即刷新隧道摘要,不等 8s 轮询
         } catch (e) { setMsg(`创建失败:${e.message}`) }
         finally { setBusy('') }
       }
@@ -2173,6 +2176,7 @@ body[data-sshhost-mode="narrow"] button[aria-label="SSH 主机"] > .sshhost-swit
         try {
           await post('/ssh/tunnel/remove')
           setMsg('✓ SSH 隧道已删除')
+          void load()   // 立即回到「未建隧道」态,不等 8s 轮询
         } catch (e) { setMsg(`删除失败:${e.message}`) }
         finally { setBusy('') }
       }
