@@ -20,7 +20,7 @@
 //     且 env 传播是 frpc.mjs:171 的真实链路，比 spy start 参数更端到端）。
 
 import { mkdtempSync, mkdirSync, statSync, readFileSync, writeFileSync, existsSync } from 'node:fs'
-import { tmpdir, userInfo as osUserInfo } from 'node:os'
+import { tmpdir, userInfo as osUserInfo, release as osRelease } from 'node:os'
 import { join, dirname } from 'node:path'
 import { createServer } from 'node:http'
 import {
@@ -363,6 +363,16 @@ rec('ETIMEDOUT → 未就绪', parseSshdProbeResult('ETIMEDOUT') === false)
     let stState = await getJSON(B, '/ssh-host/api/ssh/state')
     rec('/ssh/state → 200', stState.status === 200, `status=${stState.status}`)
     rec('/ssh/state.platform=当前平台', stState.body?.platform === process.platform, String(stState.body?.platform))
+    // darwinMajor 给前端选「系统设置」深链用:Ventura(13, Darwin 22)起是新「系统设置」,
+    // 旧 anchor com.apple.preferences.sharing 在新面板上无效;非 darwin 平台为 null。
+    {
+      const expectMajor = process.platform === 'darwin'
+        ? Number(String(osRelease()).split('.')[0]) || null
+        : null
+      rec('/ssh/state.darwinMajor=内核主版本(darwin)/null(其它)',
+        stState.body?.darwinMajor === expectMajor,
+        `got=${JSON.stringify(stState.body?.darwinMajor)} expect=${JSON.stringify(expectMajor)}`)
+    }
     rec('/ssh/state.sshdUp 跟随探测注入（true）', stState.body?.sshdUp === true, String(stState.body?.sshdUp))
     rec('/ssh/state 未生成密钥时 key=null', stState.body?.key === null, JSON.stringify(stState.body?.key))
     rec('/ssh/state.user 是当前登录名', stState.body?.user === osUserInfo().username, String(stState.body?.user))

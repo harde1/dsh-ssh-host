@@ -13,7 +13,7 @@ import { createServer } from 'node:http'
 import { readFileSync, mkdirSync, writeFileSync, rmSync, existsSync, rmdirSync, statSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { userInfo as osUserInfo, homedir } from 'node:os'
+import { userInfo as osUserInfo, homedir, release as osRelease } from 'node:os'
 
 import { createClient, ApiError } from './natfrp.mjs'
 import { createFrpcManager } from './frpc.mjs'
@@ -1560,6 +1560,11 @@ export function apply(ctx, config = {}) {
       const user = osUserInfo().username
       json(res, 200, {
         platform: process.platform,
+        // macOS 内核主版本(Darwin 22 = macOS 13 Ventura 起「系统设置」换新架构),
+        // 前端据此选能真正跳到「共享」面板的深链;非 darwin 为 null。
+        darwinMajor: process.platform === 'darwin'
+          ? Number(String(osRelease()).split('.')[0]) || null
+          : null,
         sshdUp,
         key: hostKey ? { fingerprint: sshFingerprintOf(hostKey.publicKey), hasPrivate: true } : null,
         sshTunnelId,
