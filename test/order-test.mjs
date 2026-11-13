@@ -183,6 +183,37 @@ rec('hero 卡把 sshd 未开 / 无密钥 / 无隧道三种阻塞各自说清',
 rec('旧版硬编码深链已不再出现在 SSH 区（改由 darwinMajor 判定）',
   !/location\.href = 'x-apple\.systempreferences:com\.apple\.preferences\.sharing\?Services'/.test(client))
 
+// ── 16) 「高级」区：遗留 UI 整段收起，默认关，功能项一个不少 ──
+// 折叠头在 frpc 版本条之前，容器闭合在日志锚点之前 —— 用这两条边界判断
+// 遗留项是不是真的被包住了，而不是只加了个假按钮。
+const advHead = client.indexOf('收起高级设置') > 0 || client.indexOf('高级（DSH 隧道')
+const advAnchor = client.indexOf("const [advOpen, setAdvOpen] = useState(readAdvOpenPref)")
+// 区域边界要用「折叠头」本身，不能用 state 声明：声明在函数体顶部，比整棵
+// 渲染树都早，拿它当边界会把 hero 和安装引导误判成「在高级区之后」。
+const advHeader = client.indexOf('── 高级（默认收起）')
+const logsAnchorAbs = client.indexOf('// ── 日志 ──')
+rec('「高级」折叠区锚点存在', advAnchor > 0 && advHeader > 0)
+rec('SSH hero 渲染在高级区之前（主界面只讲 SSH）',
+  client.indexOf('h(SshHero') > 0 && client.indexOf('h(SshHero') < advHeader)
+rec('高级区默认收起（readAdvOpenPref 没存过时返回 false）',
+  /function readAdvOpenPref\(\)[\s\S]{0,400}?return false/.test(client))
+rec('折叠选择落盘（与日志偏好同一套 localStorage 手法）',
+  /writeAdvOpenPref\(next\)/.test(client) && /dsh-ssh-host\.advOpen/.test(client))
+for (const [name, needle] of [['① 访问密钥', '① SakuraFrp 访问密钥'], ['② 隧道', '② 隧道'],
+  ['③ 本机端口', '③ 本机端口'], ['④ 访问密码', '④ 访问密码'], ['保存按钮', "busy ? '保存中…' : '保存'"],
+  ['frpc 版本条', 'h(FrpcVersionBar']]) {
+  const at = client.indexOf(needle)
+  rec(`${name} 收在高级区内（折叠头之后、日志之前）`,
+    at > advHeader && at < logsAnchorAbs, `at=${at} advHeader=${advHeader} logs=${logsAnchorAbs}`)
+}
+rec('frpc 安装引导留在高级区之外（缺 frpc 时仍要第一眼看见）',
+  client.indexOf('h(FrpcInstallCard') < advHeader)
+rec('日志留在高级区之外（收起时也要能查故障）',
+  logsAnchorAbs > client.indexOf("busy ? '保存中…' : '保存'"))
+rec('折叠按钮带 aria-expanded（可被辅助技术读到开合状态）',
+  /'aria-expanded': advOpen/.test(client))
+rec('高级区内说明 SSH 连入不需要动它', /纯 SSH 连入不需要动/.test(client))
+
 const passed = results.filter(Boolean).length
 console.log(`\n${passed}/${results.length} passed`)
 setTimeout(() => process.exit(passed === results.length ? 0 : 1), 200)

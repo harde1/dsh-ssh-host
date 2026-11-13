@@ -24,7 +24,10 @@ let dirty = false
 function slotOf(init) {
   const { hooks } = hookStore.get(currentCtx.key)
   const i = currentCtx.cursor++
-  if (!(i in hooks)) hooks[i] = { value: init }
+  // 真 React 的 useState 支持惰性初始化：传函数时调用它取初值。
+  // 插件里 logsOpen / advOpen 就是靠这个从 localStorage 读偏好，
+  // 夹具不实现的话初值会变成函数本身（恒真），预览里折叠区就永远是展开的。
+  if (!(i in hooks)) hooks[i] = { value: typeof init === 'function' ? init() : init }
   return { hooks, i }
 }
 
@@ -67,6 +70,7 @@ const VARIANT = process.env.PREVIEW_VARIANT ?? 'ready'
 const isCreate = VARIANT === 'create'
 const isFresh = VARIANT === 'fresh'
 const isNoPort = VARIANT === 'noport'
+const isAdv = VARIANT === 'adv'   // 高级区展开态（配合上面的 localStorage 桩）
 
 const SNAPSHOT = isFresh
   ? {
@@ -150,6 +154,14 @@ globalThis.window = {
   __ModuleLoader__: { load(mod) { module_ = mod } },
   // 让 Panel 初始就把「新建隧道」表单展开，好检查节点列表的排版与配色
   __sshhostPreviewCreate: isCreate,
+  // 「高级」区默认收起，光看默认态没法确认遗留项还在不在。这里给一份内存
+  // localStorage 桩：PREVIEW_VARIANT=adv 时预置 advOpen=1，用来量展开态的高度
+  // 与清点 ①②③④ 是否齐全。真实浏览器里这两个键由用户点出来。
+  localStorage: (() => {
+    const m = new Map()
+    if (VARIANT === 'adv') m.set('dsh-ssh-host.advOpen', '1')
+    return { getItem: (k) => (m.has(k) ? m.get(k) : null), setItem: (k, v) => m.set(k, String(v)) }
+  })(),
   addEventListener() {}, removeEventListener() {},
   open() {}, matchMedia: () => ({ matches: false, addEventListener() {} }),
 }

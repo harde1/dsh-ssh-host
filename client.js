@@ -873,6 +873,19 @@ window.__ModuleLoader__.load({
     // 隐私模式 / 存储被禁时不能因此让日志消失。
     const LOGS_OPEN_KEY = 'dsh-ssh-host:logsOpen'
 
+    const ADV_OPEN_KEY = 'dsh-ssh-host.advOpen'
+    function readAdvOpenPref() {
+      try {
+        if (typeof window === 'undefined' || !window.localStorage) return false
+        return window.localStorage.getItem(ADV_OPEN_KEY) === '1'
+      } catch {
+        return false // 存储被禁（隐私模式等）→ 退回默认收起
+      }
+    }
+    function writeAdvOpenPref(open) {
+      try { window.localStorage?.setItem(ADV_OPEN_KEY, open ? '1' : '0') } catch { /* noop */ }
+    }
+
     function readLogsOpenPref() {
       try {
         if (typeof window === 'undefined' || !window.localStorage) return true
@@ -918,6 +931,10 @@ window.__ModuleLoader__.load({
       //    用户刚收起的日志又弹开 —— 表现为「关了又自己恢复」。
       //    存在 localStorage 里（纯 UI 偏好，不必占服务端 state.json）。
       const [logsOpen, setLogsOpen] = useState(readLogsOpenPref)
+      // 「高级」区默认收起：锁定设计要求主界面只讲 SSH，遗留的 DSH 隧道配置
+      // （①密钥 ②隧道 ③本机端口 ④入口口令、保存、frpc 版本）是兜底路径，
+      // 不该和 hero 抢第一屏。选择落盘，重进页面沿用。
+      const [advOpen, setAdvOpen] = useState(readAdvOpenPref)
       const [logs, setLogs] = useState('')
       // 「新建隧道」表单：默认收起，展开时才去拉节点列表（省一次 API 调用）
       const [newOpen, setNewOpen] = useState(PREVIEW_CREATE)
@@ -1424,7 +1441,22 @@ window.__ModuleLoader__.load({
         // ── frpc 缺失时的安装引导（置顶，最显眼）──
         h(FrpcInstallCard, { inst: st.frpcInstall, onDone: () => void loadState() }),
 
-        // ── frpc 版本 + 手动检查更新（置顶；未安装/异常时自动隐藏）──
+        // ── 高级（默认收起）：遗留的 DSH 隧道配置整段搬到这里，功能项一个不少 ──
+        h('div', {},
+          h('button', {
+            type: 'button',
+            style: {
+              ...S.btnGhost, padding: '3px 10px', fontSize: '12px',
+            },
+            'aria-expanded': advOpen,
+            onClick: () => setAdvOpen((v) => { const next = !v; writeAdvOpenPref(next); return next }),
+          }, advOpen ? '收起高级设置' : '高级（DSH 隧道 / 端口 / 日志配置）'),
+          h('span', { style: { ...S.hint, marginLeft: '8px' } },
+            advOpen ? '这些是给 DSH 网页入口用的，纯 SSH 连入不需要动。' : ''),
+          advOpen
+      ? h('div', { style: { display: 'flex', flexDirection: 'column', gap: '9px', marginTop: '9px' } },
+
+        // ── frpc 版本 + 手动检查更新（未安装/异常时自动隐藏）──
         h(FrpcVersionBar, { inst: st.frpcInstall, onDone: () => void loadState() }),
 
         // ── 总开关 + 运行状态（原来三行标题，现在并成一行）──
@@ -1882,7 +1914,10 @@ window.__ModuleLoader__.load({
           : h('div', { style: { display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap' } },
             saved ? h('span', { style: S.ok }, saved) : null,
             err ? h('span', { style: S.err }, err) : null,
-            !err && pollErr ? h('span', { style: S.err }, pollErr) : null),
+            !err && pollErr ? h('span', { style: S.err }, pollErr) : null
+          )
+        )
+          : null),
 
         h('div', { style: S.divider }),
 
