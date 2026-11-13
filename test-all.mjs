@@ -39,9 +39,13 @@ for (const file of suites) {
   const m = out.match(/(\d+)\/(\d+) passed/)
   const [got, total] = m ? [Number(m[1]), Number(m[2])] : [0, 0]
 
+  // 项数与成败无关：失败套件打印出来的 N 仍是它真实的断言数。之前只在成功分支
+  // 记 actual,于是「文档核对」跑的时候若 order-test 自己正红着（它就是装文档
+  // 断言的那个套件）,它的 110 项会从总和里凭空消失,报出「873 ≠ 763」这种看着
+  // 像数据被改坏的误导数字。
+  actual.push([file, total])
   if (r.status === 0 && m && got === total) {
     passed += total
-    actual.push([file, total])
     console.log(`  ok   ${file.padEnd(26)} ${got}/${total}`)
   } else {
     failed += total - got || 1
