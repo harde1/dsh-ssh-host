@@ -8,24 +8,29 @@
 同时完整保留 DSH 界面的公网穿透与密码门——frpc 全托管、隧道面板、流量面板、
 Host 围栏反代、DSH 二次认证等上游能力原样可用(相关说明见文末保留章节)。
 
+**界面结构(本 fork 重排过,与上游明显不同)**:设置页第一屏只有一张 **SSH 中心卡**,
+它按「还缺什么」只给一个主动作(粘访问密钥 → 开远程登录 → 生成密钥 → 建 SSH 隧道 →
+复制连接命令),其余全部收进下方默认收起的 **「高级」区**(frpc 版本、总开关、公网地址与
+流量、① 访问密钥 ② 隧道 ③ 本机端口 ④ 访问密码、保存)。frpc 安装引导与 frpc 日志
+**故意留在区外**——缺 frpc 时 SSH 也连不上,收起高级区时也要能查故障。
+
 > [!WARNING]
 > **本插件是「与 AI 对话协作」的产物。** 代码与文档由作者与 AI(DeepSeek Harness 会话)
 > 多轮对话生成并反复迭代而来,**没有经过人工逐行审计**,实测环境也仅限于作者本机的
 > macOS。请自行审阅源码后再使用;涉及安全敏感场景时请格外谨慎。
 > 代码按 MIT「按原样(AS IS)」提供,不附带任何担保,风险自负。
 >
-> 与「AI 生成即不可靠」无关的部分:**测试是可复核的**。`npm test` 是 26 个套件、807 项
+> 与「AI 生成即不可靠」无关的部分:**测试是可复核的**。`npm test` 是 26 个套件、873 项
 > 全离线的断言(不连 SakuraFrp、不需要访问密钥、不写任何用户目录),其中
 > `admin-auth-test.mjs` 专门覆盖网关鉴权(7 种路径花招、WS 同权、改密后旧 cookie 失效),
-> `ssh-host-test.mjs` 覆盖 SSH 主机能力与路由(92 项)。数字与结论都能自己跑一遍验证,
-> 不必只信这段说明。
+> `ssh-host-test.mjs` 覆盖 SSH 主机能力与路由(116 项,含用系统 `ssh-keygen` 反推公钥来
+> 判私钥格式是否合法)。数字与结论都能自己跑一遍验证,不必只信这段说明。
 
 ---
 
-## 快速开始(四步,约 5 分钟)
+## 快速开始(SSH 连入只需三步,约 3 分钟)
 
-前提:一个 SakuraFrp 账号(SSH 隧道和 DSH 隧道一样,都建在 SakuraFrp 上),
-并且已在面板 **① 访问密钥** 里配好访问密钥——没有它,创建 SSH 隧道会被拒(400 no-token)。
+前提:一个 SakuraFrp 账号(SSH 隧道和 DSH 隧道一样,都建在 SakuraFrp 上)。
 
 设置页入口:**设置 → SSH 主机**;侧边栏入口:「SSH 主机」,带三色状态点(🟢🟡🔴)
 和一键启停开关。
@@ -44,30 +49,45 @@ dsh plugin --profile desktop add dsh-ssh-host -w
 > `dependencies` 指向克隆目录(`"dsh-ssh-host": "link:<克隆目录绝对路径>"`),
 > 并把 `"dsh-ssh-host"` 加进 `dsh.profile.bundles`,再 `dsh plugin --profile desktop install`。
 
-**2. 开「远程登录」**
+**2. 在 SSH 中心卡里粘贴访问密钥,开「远程登录」**
 
-macOS:系统设置 → 通用 → 共享 → **远程登录**,打开。面板每 ≤8 秒真探测一次
-`127.0.0.1:22`;没开时 SSH 区块会给出「打开系统设置」深链,点它直达共享面板。
+SSH 中心卡按「还缺什么」只显示当前那一步,你不需要往下找:
 
-**3. 面板点「生成 SSH 密钥」**
+- **粘贴 SakuraFrp 访问密钥**(控制台 → 密钥管理)→ 点「保存并继续」。之后密钥、
+  隧道节点、远程端口、通道开关全部自动,不再有第二个要填数字的地方。
+- **开远程登录**:macOS 系统设置 → 通用 → 共享 → **远程登录**。点卡片上的「打开系统设置」
+  会直接跳到这一面板(深链按 macOS 版本自动选:Ventura 起用新设置面板的
+  `com.apple.Sharing-Settings.extension`,更早的系统用旧 anchor;新系统上旧 anchor 点了没反应,
+  这正是之前按钮"看起来坏掉"的原因),也可以复制卡片上给的那行
+  `sudo systemsetup -setremotelogin on` 执行。面板每 ≤8 秒真探测一次 `127.0.0.1:22`,
+  开启后自动识别,不必刷新页面。
 
-生成一把专用于 SSH 连入的 ed25519 密钥:公钥写进本机 `~/.ssh/authorized_keys`
-(带 `dsh-ssh-host` 标记行),私钥落到 `~/.dsh/dsh-ssh-host/ssh-host-key`(0600)。
-面板显示 SHA256 指纹,手机端导入私钥后可比对这串指纹。
+**3. 剩下的自动生成,手机导入私钥即连**
 
-**4. 面板点「创建 SSH 隧道」→ 手机 Termius 导入私钥 → 连接**
+访问密钥一存,卡上出现「一键建立 SSH 隧道」;点它之后全自动:
 
-创建的是一条 TCP 隧道:`local_port=22` 直连本机 sshd,远程端口由官方分配,节点复用
-当前 DSH 隧道的节点(也可显式传)。创建后 frpc 自动重连,带上这条新隧道。就绪态面板
-会显示连接命令 `ssh <user>@<节点host> -p <远程端口>`。
+- **密钥**:`~/.dsh/dsh-ssh-host/ssh-host-key`(0600,OpenSSH `authkey` 格式)由插件生成,
+  公钥写进本机 `~/.ssh/authorized_keys`(带 `dsh-ssh-host` 标记行,只维护这一行,
+  你自己的条目原样保留)。卡上显示 SHA256 指纹,手机端导入后可比对。
+- **隧道**:一条 TCP 隧道,`local_port=22` 直连本机 sshd,远程端口由官方分配;
+  节点由三级回退自动选定(显式指定 → 官方隧道列表里的现有节点 → 按「可新建 / 内地 /
+  负载」排序挑一个),你不需要填节点或端口。
+- **通道**:隧道创建成功后自动打开总开关并拉起 frpc,不需要再去点一次「开启」。
+  手工关掉之后不会被自动复活(尊重你的选择,需要时再点开关)。
 
-手机端:Termius → Keychain → + → Import,把面板「查看私钥(导入手机)」里整段
+就绪态卡上显示连接命令 `ssh <user>@<节点host> -p <远程端口>` 与「复制连接命令」按钮
+(`navigator.clipboard` 不可用时自动退化到 textarea 复制;两条路都不通会直接提示你手动选中——
+面板本身已 `userSelect: all`)。
+
+手机端:Termius → Keychain → + → Import,把卡上「私钥 → 导入手机(Termius)」里整段
 (含 BEGIN/END 行)粘贴保存,主机认证选这把钥匙,连上面那条命令即可。
 
-> 四步在界面上是**逐步解锁**的:非 macOS → sshd 未开 → 未生成密钥 → 未建 SSH 隧道 → 就绪,
-> 上一步没到位,下一步不出现。重新生成密钥后必须重新导入私钥(见「安全说明」)。
+> 中心卡是**逐步解锁**的:非 macOS → 未填访问密钥 → sshd 未开 → 未生成密钥 → 未建 SSH 隧道
+> → 就绪,上一步没到位,下一步不出现。重新生成密钥后必须重新导入私钥(见「安全说明」)。
+> SSH 全程只用密钥认证,中心卡里没有任何口令相关的东西;④ 那条属于 DSH 网页入口,
+> 在「高级」区里,SSH 连入不经过它。
 
-**附:DSH 界面公网穿透的首次使用**(继承上游,同样逐步解锁):
+**附:DSH 界面公网穿透的首次使用**(继承上游,同样逐步解锁;配置项都在「高级」区):
 ① 访问密钥——SakuraFrp 面板 → 用户信息 → 查看访问密钥,粘贴进设置页保存;
 ② 隧道——下拉选一条已有的,一条都没有就点「新建」(选节点、填端口,远程端口官方分配);
 ③ 本机端口——新装是空的,必须自己填,填完立刻检测能不能用;
@@ -152,7 +172,10 @@ POST /ssh-host/api/frpc/ack-result   确认安装结果提示(落盘,跨会话�
 GET  /ssh-host/api/ssh/state
      快照:sshdUp(真 TCP 探测 127.0.0.1:22)/ key {fingerprint,hasPrivate} /
      sshTunnelId / tunnel {id,online,remote,nodeHost,node} / user / connectCmd
-     (隧道上线后给出 `ssh <user>@<节点host> -p <远程端口>`,否则 null)
+     (隧道上线后给出 `ssh <user>@<节点host> -p <远程端口>`,否则 null)/
+     channel {enabled,running,hasToken}(中心卡的通道开关状态用)
+     —— channel 三个值全是本地读:enabled 取自 state,running 取自 frpc 进程快照,
+     hasToken 走密钥解析路径,**不额外打官方 API、不做二次 TCP 探测**(这路由前端 8 秒轮一次)
 
 POST /ssh-host/api/ssh/key/create
      生成专用 ed25519 密钥对:私钥/公钥落 ~/.dsh/dsh-ssh-host/(0600),
@@ -166,9 +189,14 @@ GET  /ssh-host/api/ssh/key/private
      还没生成密钥时 404 {error:'no-key'}
 
 POST /ssh-host/api/ssh/tunnel/create
-     body {name?, node?}:name 默认 'SSH'(截 24 字);节点显式传 > 复用当前 DSH 隧道的节点。
-     隧道固定 TCP、local_ip=127.0.0.1、local_port=22,远程端口官方分配;成功后 sshTunnelId
-     落 state.json,总开关开着时自动重启 frpc。
+     body {name?, node?}:name 默认 'SSH'(截 24 字)。节点由三级回退自动选定,
+     正常路径下不需要传、也不需要人挑:① 显式 body.node → ② 复用官方隧道列表里现有
+     隧道的节点 → ③ 按「可新建 / 内地可用 / 负载低」从免费节点清单里挑一个。
+     三级全空才回 400 no-node(此时是隧道列表与节点清单双双取不到,不是「你没填」)。
+     隧道固定 TCP、local_ip=127.0.0.1、local_port=22(SSH 没有可填端口的余地),
+     远程端口官方分配;成功后 sshTunnelId 落 state.json,**通道没开时自动开启并拉起 frpc**——
+     建完隧道即可连,不必再点一次开关。自动开启只挂在「创建成功」这一个时机,
+     你手工关掉通道之后不会被它复活。
      200 {ok, id, remote, warning}
      错误:400 unsupported-platform(非 macOS)/ 409 sshd-down(远程登录没开)/
           409 already-created(已有 SSH 隧道)/ 400 no-token / 400 no-node /
@@ -195,6 +223,13 @@ POST /ssh-host/api/ssh/tunnel/remove
   导出的 PKCS8 私钥会在插件加载时原地换封装——同一把密钥,公钥与
   `~/.ssh/authorized_keys` 都不变,手机端只需重新导出一次),不做账号密码引导;
   系统密码登录是 sshd 自带行为,插件不碰。
+- **`authkey` 不是可选的**:PKCS8(`BEGIN PRIVATE KEY`)在 Termius 上会直接报
+  `Unsupported key type: PRIVATE KEY`,连导入都进不去。格式是否合法由系统 `ssh-keygen` 判:
+  读得动这把私钥、且推出的公钥与 `authorized_keys` 里那行逐字节一致才算对
+  (`ssh-host-test.mjs` 第 1 块拿它当裁判)。**「看起来像 PEM」不构成证据。**
+- **SSH 中心卡里没有任何口令概念**:唯一带口令语义的是 ④,它属于 DSH 网页入口的密码门,
+  收在「高级」区,SSH 流量不经过它;中心卡全文不出现「密码」二字(有断言守着),
+  免得人在纯密钥流程里去找一个根本不存在的密码框。
 - **私钥 0600,落插件数据目录,不入 state.json**:私钥/公钥落
   `~/.dsh/dsh-ssh-host/ssh-host-key(.pub)`,权限 0600,重启后从盘上恢复;
   state.json 里永远没有私钥(与 gatePassword 同纪律)。
@@ -225,7 +260,8 @@ POST /ssh-host/api/ssh/tunnel/remove
 也是拿一个临时 `DSH_HOME` 跑冷启动)。
 
 ```bash
-npm test                 # 26 个套件、807 项,串行跑并汇总
+npm test                 # 26 个套件、873 项,串行跑并汇总
+# npm test 会核对 README 的套件表与总数：文档数字一过期,测试直接红
 npm test -- path         # 只跑名字含关键字的套件
 ```
 
@@ -238,8 +274,8 @@ npm test -- path         # 只跑名字含关键字的套件
 
 | 套件 | 项 | 覆盖 |
 |---|---|---|
-| `ssh-host-test.mjs` | 92 | SSH 主机能力:ed25519 密钥 / authorized_keys upsert / 连接命令 / sshd 探测注入点 / SSH 路由 / frpc 多隧道(NATFRP_TARGET) |
-| `order-test.mjs` | 68 | 四步解锁顺序、表单排布、按钮文案与出现条件 |
+| `ssh-host-test.mjs` | 116 | SSH 主机能力:ed25519 密钥(**用系统 `ssh-keygen -y` 反推公钥来判封装是否合法**)/ authorized_keys upsert / 连接命令 / sshd 探测注入点 / SSH 路由 / 旧 PKCS8 私钥自愈 / 节点三级回退 / 建隧道自动开启通道 / frpc 多隧道(NATFRP_TARGET) |
+| `order-test.mjs` | 110 | 解锁顺序、表单排布、按钮文案与出现条件、SSH 中心卡契约(复制回退 / 深链分支 / 区内不出现口令字样)、「高级」区折叠边界(遗留项确实在区内、日志与安装引导确实在区外) |
 | `paths-test.mjs` | 51 | frpc / DSH home 路径解析(含 `$DSH_HOME` 空白、`PROFILE_DIR` 反推) |
 | `installer-test.mjs` | 52 | frpc 资产挑选 / 下载 / 版本校验 / 版本号提取与比较 |
 | `progressive-test.mjs` | 59 | 渐进解锁派生状态与提示语 |
@@ -266,11 +302,19 @@ npm test -- path         # 只跑名字含关键字的套件
 | `credential-token-test.mjs` | 5 | `tokenRef` → DSH credentials 读写 |
 
 界面走查用 `preview-render.mjs`:它用极简 React 桩把真实的 `Panel` 渲染成静态 HTML,
-可导出 `ready` / `fresh` / `create` / `noport` 四种形态,再用无头浏览器截图核对。
+可导出 `ready` / `fresh` / `create` / `noport` / `adv` 五种形态,再用无头浏览器截图核对。
+`adv` 靠一份内存 localStorage 桩把「高级」区预置成展开态——默认收起时 ①②③④ 根本不在
+DOM 里,光看默认态没法证明遗留项还在。
 
 ```bash
 PREVIEW_VARIANT=fresh node preview-render.mjs .preview/fresh.html
+PREVIEW_VARIANT=adv   node preview-render.mjs .preview/adv.html   # 高级区展开
 ```
+
+> 桩里的 React 只有 `useState/useEffect/useRef/useCallback` 四个钩子,和真 React 不等价:
+> 它曾经不支持 `useState(fn)` 的惰性初始化,把函数本体当初值存下(恒真),于是预览里
+> 折叠区永远展开。**「预览看起来对」不等于「真浏览器里对」**——涉及默认值的 UI 请用
+> 断言或真浏览器验,别只信这个夹具。
 
 追加真实 API 冒烟(只读端点,会消耗一次 API 调用):
 
@@ -303,6 +347,16 @@ NATFRP_TOKEN='你的密钥' node test/verify.mjs
 - **frpc 生命周期与 DSH 绑定**:DSH 关闭 = frpc 退出 = SSH 与 DSH 两条隧道同时断开;
   需要 SSH 常驻请另配系统服务
 - **重新生成密钥后手机端必须重新导入私钥**(replaced 语义,见「安全说明」)
+- **「打开系统设置」深链在个别系统版本上可能无反应**:scheme 不存在时浏览器静默失败,
+  插件探测不到,所以卡片同时给出可复制的 `sudo systemsetup -setremotelogin on` 作第二条路;
+  anchor 按 Darwin 主版本号选(≥22 → `com.apple.Sharing-Settings.extension`,更早 → 旧
+  `com.apple.preferences.sharing?Services`)
+- **面板高度的像素预算在没装 Edge/Chrome 的机器上是空跑的**:`density-test` 那两个数字量的是
+  真实排版高度,本机没有可用浏览器时这两条直接 SKIP——改了界面高度**不会被它拦住**,
+  别把「11/11 passed」读成"密度已复核";预算值目前仍是折叠前的旧结构量出来的,偏松
+- **`preview-render.mjs` 的 React 桩与真 React 不等价**:惰性 `useState(fn)` 之前不支持,
+  会把函数本体当初值存下(恒真),导致「高级」区在预览里永远展开。它只能看排版和文案,
+  不能当行为验证;默认值类 UI 请用断言或真浏览器验
 
 **DSH 穿透(继承上游)**
 

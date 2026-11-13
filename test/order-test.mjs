@@ -13,7 +13,7 @@
 const results = []
 const rec = (n, p, d = '') => { results.push(p); console.log(`${p ? 'PASS' : 'FAIL'}  ${n}${d ? ' — ' + d : ''}`) }
 
-import { readFileSync } from 'node:fs'
+import { readFileSync, readdirSync } from 'node:fs'
 const client = readFileSync(new URL('../client.js', import.meta.url), 'utf8')
 const index = readFileSync(new URL('../index.js', import.meta.url), 'utf8')
 const readme = readFileSync(new URL('../README.md', import.meta.url), 'utf8')
@@ -132,6 +132,56 @@ rec('README 首次使用按新顺序（密钥→隧道→端口→密码）',
 rec('README 说明四步是逐步解锁的', /逐步解锁/.test(readme))
 rec('README 说明日志默认展开且实时刷新', /日志默认展开/.test(readme))
 rec('README 不再叫「一键对齐」', !/一键对齐/.test(readme))
+
+// ── 12b) 文档与「SSH 中心 + 折叠高级区」同步（README 曾经整段还在讲上游四步）──
+rec('README 顶部说明界面是 SSH 中心卡 + 默认收起的高级区',
+  /SSH 中心卡[\s\S]{0,300}?「高级」区/.test(readme))
+rec('README 说明安装引导与日志故意留在高级区之外',
+  /留在区外\*\*——缺 frpc 时 SSH 也连不上/.test(readme))
+rec('README 快速开始首行不再要求先去面板配访问密钥',
+  !/并且已在面板 \*\*① 访问密钥\*\* 里配好访问密钥/.test(readme))
+rec('README 写明 SSH 这条路只需三步', /快速开始\(SSH 连入只需三步/.test(readme))
+rec('README 说明节点由三级回退自动选定、不必手填',
+  /三级回退/.test(readme) && /不需要传、也不需要人挑/.test(readme))
+rec('README 说明建好隧道自动开启通道',
+  /通道没开时自动开启并拉起 frpc|自动开启并拉起 frpc/.test(readme))
+rec('README 说明手工关掉通道不会被自动复活', /不会被它复活/.test(readme))
+rec('README 写明 authkey 不是可选的（Termius 报 Unsupported key type）',
+  /`authkey` 不是可选的/.test(readme) && /Unsupported key type: PRIVATE KEY/.test(readme))
+rec('README 把格式判据交给 ssh-keygen 而不是「看起来像 PEM」',
+  /格式是否合法由系统 `ssh-keygen` 判[\s\S]{0,200}?逐字节一致/.test(readme)
+    && /`ssh-keygen -y` 反推公钥/.test(readme))
+rec('README 说明 ④ 口令只属于 DSH 网页入口，SSH 不经过它',
+  /中心卡里没有任何口令概念[\s\S]{0,200}?SSH 流量不经过它/.test(readme))
+rec('README 交代深链按 Darwin 主版本选 anchor', /com\.apple\.Sharing-Settings\.extension/.test(readme))
+rec('README 诚实标注密度像素预算在本机是 SKIP 的', /density-test[\s\S]{0,160}?SKIP/.test(readme))
+rec('README 诚实标注预览 React 桩与真 React 不等价', /preview-render\.mjs[\s\S]{0,200}?不等价/.test(readme))
+// 数字最容易飘：每次加断言 README 的项数就过期一次。这里不写死数字，
+// 而是校验 README 自己内部一致 —— 正文声明的总数/套件数必须等于套件表求和，
+// 且表里的套件名必须和 test/ 目录实际文件一一对应。
+const table = [...readme.matchAll(/^\| `([a-z-]+\.mjs)` \| (\d+) \|/gm)]
+const declared = +(readme.match(/26 个套件、(\d+) 项/) || [])[1]
+  || +(readme.match(/# 26 个套件、(\d+) 项/) || [])[1]
+rec('README 套件表能解析出 26 行', table.length === 26, `${table.length} 行`)
+rec('README 正文声明的总项数 = 套件表求和',
+  table.reduce((a, m) => a + Number(m[2]), 0) === declared, `表=${table.reduce((a, m) => a + Number(m[2]), 0)} 声明=${declared}`)
+// 正文里凡是「N 个套件、M 项」这种成对声明,数字必须全部一致(不写死具体值:
+// 每次加断言它都会变,写死就是埋下一个过期点)。逐套件那一列由 runner 核对。
+const claims = [...readme.matchAll(/(\d+) 个套件、(\d+) 项/g)]
+rec('README 的总数声明彼此一致', claims.length >= 2
+  && claims.every((m) => m[1] === claims[0][1] && m[2] === claims[0][2]),
+  claims.map((m) => `${m[1]}/${m[2]}`).join(' '))
+const listed = new Set(table.map((m) => m[1]))
+const onDisk = readdirSync(new URL('.', import.meta.url)).filter((f) => f.endsWith('.mjs'))
+rec('README 列出的套件与 test/ 目录实际文件一一对应',
+  onDisk.filter((f) => !listed.has(f)).length === 0 && [...listed].every((f) => onDisk.includes(f)),
+  `缺表=${onDisk.filter((f) => !listed.has(f)).join(',')} 多表=${[...listed].filter((f) => !onDisk.includes(f)).join(',')}`)
+// 逐套件的项数不写死在这里：本套件自己是 107 还是 120 只有跑完才知道，
+// 写死等于埋一个新的过期点。那层核对放在 test-all.mjs（唯一知道各套件真实项数
+// 与总数的地方），它会拿实跑数字逐行比对 README 的套件表。
+rec('README 套件表的项数交给 runner 逐行核对（本文件不写死数字）',
+  /npm test 会核对 README 的套件表/.test(readme))
+rec('README 预览形态含 adv（高级区展开态）', /`adv`/.test(readme))
 
 // ── 13) 刷新列表按钮去掉，改为选中/新建时自动刷新 ──
 rec('隧道区不再有「刷新列表」按钮', !/刷新列表/.test(client))
