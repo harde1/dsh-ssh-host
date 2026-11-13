@@ -1,0 +1,8 @@
+{
+  "clearai_rerun_copy": true,
+  "purpose": "independent evaluator re-run",
+  "original_workspace": "/Users/mac/Project/dsh-ssh-host",
+  "copy": "/Users/mac/Project/dsh-ssh-host/.clearai-reruns/44c6bd245f78b6e97a3b513239cca76157bfc2a681adc01bfb97d2c17b3b8006",
+  "environment": {},
+  "note": "This directory is a disposable copy. Write outputs inside it; do not write the original author's global user-data directories."
+}

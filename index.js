@@ -189,6 +189,18 @@ export function apply(ctx, config = {}) {
   let tunnelId = String(state.tunnelId ?? config.tunnelId ?? '').trim()
   // SSH 隧道 ID:与 DSH 隧道并存,同一 frpc 进程承载(NATFRP_TARGET 多值)。
   let sshTunnelId = String(state.sshTunnelId ?? '').trim()
+  // ── 撞车自愈：SSH 隧道与 DSH 隧道必须是两条不同的官方隧道 ──
+  // 真机事故（2026-11-13）：账号免费档只有一条官方隧道时，自动建 SSH 隧道会把它复用，
+  // 于是 sshTunnelId === tunnelId。startAll 的 Set 去重后 NATFRP_TARGET 只剩一个 ID，
+  // autoAlign 再把这条隧道的 local_port 改成 3083（DSH 网关端口）→ frpc 收到 SSH 连接
+  // 转发到 3083 无人监听 → 「连接被拒绝」。撞车状态下这条隧道已被 autoAlign 污染成
+  // DSH 隧道，SSH 连入不可能恢复，所以启动时发现撞车就清掉 sshTunnelId（保留 tunnelId），
+  // 让用户下次建 SSH 隧道时真的建一条新的。
+  if (sshTunnelId && tunnelId && sshTunnelId === tunnelId) {
+    logWarn(`natfrp: SSH 隧道与 DSH 隧道撞车（sshTunnelId===tunnelId=${tunnelId}），已清空 SSH 隧道引用，请重新创建`)
+    sshTunnelId = ''
+    writeState({ sshTunnelId: '' })
+  }
   // 私钥注入目录:默认真实 ~/.ssh;测试可经 DSH_SSH_DIR 指到临时目录。
   const sshDir = String(process.env.DSH_SSH_DIR ?? '').trim() || join(homedir(), '.ssh')
   // 已生成的密钥从盘上恢复(私钥/公钥两个文件,均 0600),重启后 /key/private 仍可用。
@@ -1545,6 +1557,36 @@ export function apply(ctx, config = {}) {
     }
 
     // ---------- SSH 主机 ----------
+
+    /**
+     * SSH 主机「初始化建议」：首次使用要给用户一个不用思考的默认值。
+     * ③ 本机端口是新装唯一要填的数字 —— 从这里取一个「现在确实空闲」的端口预填，
+     * 用户直接保存即可，不必理解 1024–65535 的端口区间。
+     * 只读、无副作用（试绑即放），也不会碰官方 API。
+     */
+    if (path === '/ssh-host/api/ssh/host/init' && req.method === 'GET') {
+      // 优先建议 22 以外的常用区间；试绑第一个能绑上的就返回
+      let suggestPort = null
+      for (let p = 30000; p <= 30020; p++) {
+        const r = await checkPortFree(p)
+        if (r.available) { suggestPort = p; break }
+      }
+      if (suggestPort === null) {
+        // 30000-30020 全被占（极罕见）：放宽到整区间再扫一遍
+        for (let p = 1024; p <= 65535; p++) {
+          const r = await checkPortFree(p)
+          if (r.available) { suggestPort = p; break }
+        }
+      }
+      json(res, 200, {
+        suggestPort,
+        // 当前已设的端口（有值 = 不用再预填）；无端口时才需要前端用它
+        currentPort: gatePort,
+        frpcReady: false, // 保守：不在此处探测，避免每 8s 轮询多一次子进程调用
+      })
+      return true
+    }
+
 
     if (path === '/ssh-host/api/ssh/state' && req.method === 'GET') {
       const [sshdUp] = await Promise.all([checkSshd()])

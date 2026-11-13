@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "SSH Host (SakuraFrp tunnel)",
+    "description": "DeepSeek Harness plugin: this machine acts as an SSH host, reachable from a remote phone over a SakuraFrp tunnel; the DSH UI keeps its public tunnel panel and password gate."
+  }
+}

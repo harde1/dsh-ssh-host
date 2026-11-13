@@ -921,8 +921,10 @@ window.__ModuleLoader__.load({
       const [saved, setSaved] = useState('')
       const [alignMsg, setAlignMsg] = useState('')
       const [gatePort, setGatePort] = useState('')
+      // ③ 本机端口的自动建议：新装没端口时不用手填，后端试绑给一个「现在空闲」的数。
+      // 只在「服务端确实没设过端口」时打一次（避免轮询反复请求）；用户改过就尊重用户。
+      const suggestPortFetched = useRef(false)
       const [gatePassword, setGatePassword] = useState('')
-      const [token, setToken] = useState('')
       // 日志默认展开：很多问题（连不上、端口被抢）只有日志里有答案，
       // 藏起来等于让用户先猜一次。展开状态由下面 2s 一次的轮询保持最新。
       //
@@ -968,6 +970,18 @@ window.__ModuleLoader__.load({
           if (!mounted.current) return
           setSt(s)
           if (!portDirty.current) setGatePort(String(s.gatePort ?? ''))
+          // 新装没端口 → 自动建议一个可用端口预填（少填写少操作）
+          if (!s.gatePort && !suggestPortFetched.current) {
+            suggestPortFetched.current = true
+            try {
+              const r = await getJSON('/ssh/host/init')
+              if (mounted.current && !portDirty.current && !s.gatePort) {
+                if (Number.isInteger(r?.suggestPort) && r.suggestPort >= 1024) {
+                  setGatePort(String(r.suggestPort))
+                }
+              }
+            } catch { /* 建议失败就留给用户手填 */ }
+          }
           setPollErr('')
           diagStore.kick() // 面板拿到最新状态后立刻同步侧边栏状态点
         } catch (e) {
@@ -1108,18 +1122,14 @@ window.__ModuleLoader__.load({
        * 只提交真正填了东西的键：空着 = 保持不变，不能把已有配置清掉。
        */
       const saveAll = () => {
+        // 高级区现在只剩 ④ 密码一个输入（① 密钥已移到 hero，端口自动预填）。
+        // 端口由「选隧道 / 预填」两步自动定，不需要在这里批量提交。
         const patch = {}
-        if (gatePort) patch.gatePort = Number(gatePort)
         if (gatePassword.trim()) patch.gatePassword = gatePassword.trim()
-        if (token.trim()) patch.token = token.trim()
         // 只有真正保存成功才清空输入：失败还清空的话用户得重新敲一遍
         apply(patch).then((ok) => {
           if (!ok) return
-          setToken('')
           setGatePassword('')
-          // 密钥/端口变了 → 隧道列表和端口校验都得重拉，
-          // 不然下面还停在「列表加载中」或者旧的端口警告上
-          void loadExtra()
         })
       }
 
@@ -1579,60 +1589,6 @@ window.__ModuleLoader__.load({
             ? h('div', { style: { ...S.hint, marginTop: '3px' } }, nextHint)
             : null),
 
-        // ① 访问密钥：「获取密钥」紧跟输入框（它解释的就是这个框从哪来）。
-        //    保存做成输入框内嵌按钮 —— 贴在框里右上角，粘完密钥手不用离开输入区；
-        //    而且只有框里真有东西时才出现，空框上挂个「保存」纯属噪音。
-        h('div', { style: S.field },
-          h('div', { style: S.flabel, title: 'SakuraFrp 管理面板 → 用户信息 → 查看访问密钥' },
-            '① SakuraFrp 访问密钥'),
-          h('div', { style: { display: 'flex', alignItems: 'center', gap: '6px', minWidth: 0, flexWrap: 'wrap' } },
-            h('div', { style: { position: 'relative', flex: '1 1 130px', minWidth: 0, display: 'flex' } },
-              h('input', {
-                // 有内嵌按钮时右侧留出它的宽度，否则长密钥会钻到按钮底下
-                style: { ...S.input, flex: '1 1 auto', minWidth: 0, paddingRight: token.trim() ? '50px' : '9px' },
-                type: 'password', value: token,
-                placeholder: st.tokenConfigured ? '已配置，留空保持不变' : '粘贴访问密钥',
-                autoComplete: 'new-password',
-                onChange: (e) => setToken(e.target.value),
-              }),
-              token.trim()
-                ? h('button', {
-                  type: 'button',
-                  title: '保存密钥并加载隧道',
-                  style: {
-                    position: 'absolute', right: '4px', top: '50%', transform: 'translateY(-50%)',
-                    padding: '2px 7px', fontSize: '11px', lineHeight: 1.5,
-                    borderRadius: '4px', border: 'none', cursor: busy ? 'default' : 'pointer',
-                    background: '#4f6ef7', color: '#fff', opacity: busy ? 0.6 : 1,
-                  },
-                  disabled: busy,
-                  onClick: saveAll,
-                }, busy ? '…' : '保存')
-                : null),
-            st.tokenConfigured
-              ? h('button', {
-                type: 'button',
-                style: { ...S.btnGhost, flex: 'none', fontSize: '12px', padding: '4px 9px' },
-                disabled: busy,
-                onClick: () => {
-                  const ok = typeof window === 'undefined' || window.confirm(
-                    '清除后隧道列表和 frpc 都会失效，需要重新填密钥。确定清除？')
-                  if (!ok) return
-                  void apply({ clearToken: true }).then((done) => {
-                    if (!done) return
-                    // 密钥没了 → 列表也拉不到了，直接清空，别留着上一轮的旧数据
-                    setTunnels([])
-                    setSyncMsg('')
-                  })
-                },
-              }, '清除')
-              : null,
-            h(ExternalLink, {
-              href: 'https://www.natfrp.com/user/',
-              title: '打开 SakuraFrp 管理面板，在「用户信息」里查看访问密钥',
-              style: { flex: 'none', fontSize: '12px', whiteSpace: 'nowrap' },
-            }, '获取密钥 ↗'))),
-
         // ── ② 隧道 ──
         // 有密钥才出现：列表要凭密钥才拉得到，没密钥时这一块只会显示「加载中…」。
         // 选完由服务端把本机端口改成隧道里的端口，所以不用在下面再手填一遍端口。
@@ -1857,7 +1813,7 @@ window.__ModuleLoader__.load({
                 style: { ...S.hint, marginTop: 0, color: portOk ? '#16a34a' : '#d97706' },
               }, portMsg)
               : h('span', { style: { ...S.hint, marginTop: 0 } },
-                gatePortNum ? '改这里会同时改隧道里的端口' : '还没填，比如 3083'))) : null,
+                gatePortNum ? '改这里会同时改隧道里的端口' : '已自动选好一个可用端口，直接保存即可'))) : null,
 
         // 端口同步的结果（保存或选隧道后才有），没有就不占行
         syncMsg ? h('div', { style: /^⚠/.test(syncMsg) ? S.warn : S.ok }, syncMsg) : null,
@@ -1898,9 +1854,8 @@ window.__ModuleLoader__.load({
           : null,
 
         // ── 保存 ──
-        // 主保存按钮在 ① 右侧（粘贴完密钥顺手就能存）；这里留一个次级入口，
-        // 因为改完 ④ 密码时视线就在底部，不必再滚回面板顶部找按钮。
-        // 两个按钮同一份逻辑（saveAll），不会出现「这个能存、那个不能存」。
+        // ① 密钥输入已随 hero 卡删掉（hero 里粘贴即存），这里只剩 ④ 密码一个输入。
+        // 保存按钮只提交 gatePassword —— 端口已自动预填并随 ② 选隧道同步，不需要再批量保存。
         showTunnel
           ? h('div', { style: { display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap', marginTop: '2px' } },
             h('button', {

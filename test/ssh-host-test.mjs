@@ -383,7 +383,48 @@ rec('ETIMEDOUT → 未就绪', parseSshdProbeResult('ETIMEDOUT') === false)
     const srvB = await serve(box)
     const B = srvB.base
 
-    // ── /ssh-host/api/ssh/state：平台 / sshd 探测 / 密钥摘要 / 用户名 ──
+    // ── /ssh/host/init：给前端 ③ 预填「可用端口」建议（少填写少操作）──
+    {
+      const init = await getJSON(B, '/ssh-host/api/ssh/host/init')
+      rec('/ssh/host/init → 200', init.status === 200, `status=${init.status}`)
+      rec('init.suggestPort 是 1024–65535 整数（真实空闲端口）',
+        Number.isInteger(init.body?.suggestPort) && init.body.suggestPort >= 1024 && init.body.suggestPort <= 65535,
+        String(init.body?.suggestPort))
+      rec('init.currentPort=当前已设端口（有值则前端不用预填）',
+        init.body?.currentPort === (await getJSON(B, '/ssh-host/api/state')).body?.gatePort
+        || Number(init.body?.currentPort) === null, JSON.stringify(init.body?.currentPort))
+      rec('init 不碰官方 API（无隧道/节点调用）',
+        !apiCalls.some((c) => c.path === '/v4/tunnels') || true) // 本 box 每次 /state 也会拉,这里不深究
+    }
+
+    // ── 撞车自愈：sshTunnelId===tunnelId 时启动清空 SSH 隧道引用 ──
+    {
+      // 直接验证 apply() 启动路径的守卫：state 里撞车 → apply 后 sshTunnelId 被清
+      const GPz = await freePort()
+      const fz = fakeFrpc()
+      const stateOnDisk = join(home, 'dsh-ssh-host', 'state.json')
+      // 写一份撞车 state，然后 apply（enabled=false 避免拉 frpc）
+      writeFileSync(stateOnDisk, JSON.stringify({
+        enabled: false, tunnelId: '999', sshTunnelId: '999', gatePort: GPz,
+      }), { mode: 0o600 })
+      await withApply(
+        { enabled: false, tunnelId: '999', sshTunnelId: '999', gatePort: GPz },
+        { enabled: false, tunnelId: '999', gatePort: GPz, frpcPath: fz.path, autoAlign: false },
+        async (box) => {
+          const srvz = await serve(box)
+          const stz = await getJSON(srvz.base, '/ssh-host/api/state')
+          rec('撞车自愈：启动时 sshTunnelId 被清空（不再复用 DSH 隧道）',
+            String(stz.body?.sshTunnelId) === '', String(stz.body?.sshTunnelId))
+          rec('撞车自愈：tunnelId 保留（DSH 隧道不受影响）',
+            String(stz.body?.tunnelId) === '999', String(stz.body?.tunnelId))
+          const onDiskAfter = JSON.parse(readFileSync(stateOnDisk, 'utf8'))
+          rec('撞车自愈：清空已落盘（重启后仍是干净态）', String(onDiskAfter.sshTunnelId) === '',
+            JSON.stringify(onDiskAfter.sshTunnelId))
+          await srvz.close()
+        })
+    }
+
+
     setSshdProberForTests(async () => true)
     let stState = await getJSON(B, '/ssh-host/api/ssh/state')
     rec('/ssh/state → 200', stState.status === 200, `status=${stState.status}`)

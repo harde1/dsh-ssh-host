@@ -47,28 +47,22 @@ rec('没密钥时提示「粘贴密钥 + 点右边保存」', /把管理面板�
 rec('没隧道时提示「选一条或新建」', /选一条隧道，或者点「新建」现建一条。/.test(client))
 rec('有隧道没端口时提示「填端口」', /填个本机端口，确认可用后才会出现最后一步。/.test(client))
 
-// ── 3) ① 行：获取密钥左移 + 行尾保存 ──
-const tokenBlock = client.slice(
-  client.indexOf("h('div', { style: S.field },\n          h('div', { style: S.flabel, title: 'SakuraFrp 管理面板"),
-  client.indexOf('// ── ② 隧道 ──'),
-)
-rec('① 块能定位到', tokenBlock.length > 200, `${tokenBlock.length} 字符`)
-rec('保存按钮嵌在输入框内（absolute + 右侧留白）',
-  /position: 'absolute', right: '4px', top: '50%'/.test(tokenBlock)
-  && /paddingRight: token\.trim\(\) \? '50px'/.test(tokenBlock))
-rec('保存按钮只在输入框有内容时出现', /token\.trim\(\)\s*\n?\s*\? h\('button', \{/.test(tokenBlock))
-rec('① 行尾不再有独立保存按钮', !/marginLeft: 'auto', padding: '5px 12px'/.test(tokenBlock))
-rec('① 的保存走 saveAll', /onClick: saveAll/.test(tokenBlock))
+// ── 3) 访问密钥只在 hero（少填写少操作：高级区不再有密钥输入框）──
+rec('hero 有密钥输入框（粘贴即存）', /placeholder: '粘贴访问密钥'/.test(client))
+rec('hero 密钥输入是 password 掩码（敏感凭据不明文）', /type: 'password',\s*\n\s*placeholder: '粘贴访问密钥'/.test(client))
+rec('hero 保存密钥走 /config token（粘贴即存，不用去高级区）',
+  /await post\('\/config', \{ token: v \}\)/.test(client))
+rec('高级区不再有 ① 访问密钥输入框', !/① SakuraFrp 访问密钥/.test(client))
+rec('高级区不再有「获取密钥」外链', !/获取密钥 ↗/.test(client))
 
-// 「保存密钥并加载隧道」现在只是内嵌按钮的 title（鼠标悬停说明），不再是独立按钮
-rec('「保存密钥并加载隧道」不作为按钮文案', !/'保存密钥并加载隧道'\)/.test(client))
-rec('没有残留的 apply({ token: ... }) 快捷保存', !/apply\(\{ token: token\.trim\(\) \}\)/.test(client))
-
-// ── 4) 保存逻辑收敛成一个 ──
-rec('抽出 saveAll 统一保存', /const saveAll = \(\) => \{/.test(client))
-rec('saveAll 只提交真填了的键', /if \(token\.trim\(\)\) patch\.token = token\.trim\(\)/.test(client))
-rec('底部保存也走 saveAll（不重复实现）',
-  (client.match(/onClick: saveAll/g) || []).length === 2,
+// ── 4) 保存逻辑：高级区只剩 ④ 密码，保存按钮只提交它 ──
+rec('还有 saveAll 统一保存', /const saveAll = \(\) => \{/.test(client))
+rec('saveAll 只提交 ④ 密码（密钥/端口不再从这里提交）',
+  /if \(gatePassword\.trim\(\)\) patch\.gatePassword = gatePassword\.trim\(\)/.test(client)
+  && !/patch\.token/.test(client)
+  && !/if \(gatePort\) patch\.gatePort/.test(client))
+rec('高级区只剩一个保存按钮（onClick: saveAll 恰好 1 处）',
+  (client.match(/onClick: saveAll/g) || []).length === 1,
   `${(client.match(/onClick: saveAll/g) || []).length} 处`)
 
 // ── 5) ② 的按钮文案跟下拉框走 ──

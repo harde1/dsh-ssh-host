@@ -1,0 +1,83 @@
+{
+  "name": "dsh-ssh-host",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "index.js",
+  "description": "DeepSeek Harness 插件:本机作为 SSH 主机,经 SakuraFrp 隧道供远方手机端 SSH 控制;另保留 DSH 界面的公网穿透与密码门。",
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg"
+  },
+  "files": [
+    "index.js",
+    "natfrp.mjs",
+    "frpc.mjs",
+    "gate.mjs",
+    "installer.mjs",
+    "paths.mjs",
+    "client.js",
+    "cordis.patch.yml",
+    "screenshots.json",
+    "locale/*.json",
+    "icon.svg",
+    "assets/*.png",
+    "test-all.mjs",
+    "test/*.mjs",
+    "preview-render.mjs"
+  ],
+  "engines": {
+    "node": ">=18.2"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": ">=4.0.1-rc.1 <4.0.1-0 || >=4.0.1-0 <4.0.5-0 || >=4.0.5-0 <4.0.6-0 || >=4.0.6-0 <5.0.0-0"
+  },
+  "peerDependenciesMeta": {
+    "@deepseek-ai/cordis": {
+      "optional": true
+    }
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": [
+        "@deepseek-ai/dsh-client-connection",
+        "@deepseek-ai/dsh-client-ui-layout",
+        "@deepseek-ai/dsh-client-locale"
+      ]
+    }
+  },
+  "repository": {
+    "type": "git",
+    "url": "git@github.com:harde1/dsh-ssh-host.git"
+  },
+  "homepage": "https://github.com/harde1/dsh-ssh-host#readme",
+  "bugs": {
+    "url": "https://github.com/harde1/dsh-ssh-host/issues"
+  },
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "cordis",
+    "ssh",
+    "ssh-host",
+    "sakurafrp",
+    "natfrp",
+    "frp",
+    "tunnel",
+    "reverse-proxy",
+    "内网穿透"
+  ],
+  "license": "MIT",
+  "author": "MentholTea",
+  "scripts": {
+    "test": "node test-all.mjs",
+    "preview": "node preview-render.mjs"
+  }
+}

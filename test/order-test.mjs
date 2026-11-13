@@ -22,35 +22,30 @@ const readme = readFileSync(new URL('../README.md', import.meta.url), 'utf8')
 const panelSrc = client.slice(client.indexOf("h('div', { style: S.wrap }"))
 const pos = (needle) => panelSrc.indexOf(needle)
 
-// ── 1) 填写顺序：密钥 → 隧道 → 端口 → 密码 → 保存 ──
-const pToken = pos('① SakuraFrp 访问密钥')
+// ── 1) 高级区填写顺序：隧道 → 端口 → 密码 → 保存 ──
+// ① 访问密钥已从高级区移除：SSH hero 卡里「粘贴即存」，高级区不再有密钥输入框。
+// 高级区只剩 DSH 网页入口相关的 ②③④（端口已自动预填，密码只在 DSH 穿透才需要）。
 const pTunnel = pos('② 隧道')
 const pPort = pos('③ 本机端口')
 const pPwd = pos('④ 访问密码')
-// 保存入口现在有两处：① 右侧（主）和表单底部（次级）。
-// 判断「密码之后还能存」要看最后那个，不能用第一个。
 const pSave = panelSrc.lastIndexOf("busy ? '保存中…' : '保存'")
 
-rec('① 访问密钥存在', pToken > 0, String(pToken))
 rec('② 隧道存在', pTunnel > 0, String(pTunnel))
 rec('③ 本机端口存在', pPort > 0, String(pPort))
 rec('④ 访问密码存在', pPwd > 0, String(pPwd))
 
-rec('密钥排在最前（隧道列表靠它才拉得到）', pToken > 0 && pToken < pTunnel)
+rec('高级区不再有 ① 访问密钥输入框（已移入 hero）', !panelSrc.includes('① SakuraFrp 访问密钥'))
 rec('隧道排在端口之前（选完隧道端口自动跟随）', pTunnel > 0 && pTunnel < pPort, `tunnel=${pTunnel} port=${pPort}`)
 rec('端口排在密码之前', pPort > 0 && pPort < pPwd)
 rec('密码排在保存之前', pPwd > 0 && pPwd < pSave)
 rec('旧编号不再出现（② 本机端口 / ④ 隧道 已对调）',
   !panelSrc.includes('② 本机端口') && !panelSrc.includes('③ 访问密码'))
 
-// ── 2) ① 访问密钥：末尾清除 + 附近获取密钥 ──
-const tokenBlock = client.slice(client.indexOf("'① SakuraFrp 访问密钥'"), client.indexOf('// ── ② 隧道 ──'))
-rec('① 有「清除」按钮', /'清除'/.test(tokenBlock))
-rec('清除走 clearToken（服务端能真的删干净）', /apply\(\{ clearToken: true \}\)/.test(tokenBlock))
-rec('清除会同步清空本地隧道列表', /setTunnels\(\[\]\)/.test(tokenBlock))
-rec('① 附近有「获取密钥」入口', /获取密钥 ↗/.test(tokenBlock))
-rec('获取密钥指向官方用户页', /'https:\/\/www\.natfrp\.com\/user\/'/.test(tokenBlock))
-rec('获取密钥是外链组件（桌面端也能开内置标签）', /h\(ExternalLink, \{\s*\n?\s*href: 'https:\/\/www\.natfrp\.com\/user\/'/.test(tokenBlock))
+// ── 2) 访问密钥只在 hero：高级区不再有输入框 ──
+// 「少填写少操作」落地：密钥只有 hero 一个入口（粘贴 → 保存并继续 → 自动建隧道）。
+rec('SSH hero 有访问密钥输入框（粘贴即存）', /placeholder: '粘贴访问密钥'/.test(client))
+rec('hero 保存密钥走 /config token', /await post\('\/config', \{ token: v \}\)/.test(client))
+rec('高级区不再有密钥输入框与「获取密钥」按钮', !/① SakuraFrp 访问密钥/.test(client) && !/获取密钥 ↗/.test(client))
 
 // ── 3) ② 隧道：不再拼「离线」 ──
 rec('隧道下拉不再拼「离线」', !/\$\{t\.online \? '' : ' · 离线'\}/.test(client))
@@ -67,6 +62,13 @@ rec('颜色按档位给（绿/黄/橙/红）',
 rec('拿不到负载时不冒充空闲', /没有|未知/.test(client) && /load < 0/.test(client))
 rec('满载节点在下拉里禁用', /value: String\(n\.id\), disabled: !can/.test(client))
 rec('节点用原生 select（一行放得下几十个）', /h\('select', \{[\s\S]{0,400}?— 选择节点 —/.test(client))
+
+// ── 4b) ③ 本机端口自动预填（少填写少操作：新装不用手填端口）──
+rec('前端未设端口时会请求 /ssh/host/init', /getJSON\('\/ssh\/host\/init'\)/.test(client))
+rec('预填用 init.suggestPort（后端试绑的真实空闲端口）',
+  /Number\.isInteger\(r\?\.suggestPort\) && r\.suggestPort >= 1024/.test(client))
+rec('用户已手动编辑时不覆盖预填', /!portDirty\.current/.test(client))
+rec('服务端已设端口时不预填', /!s\.gatePort/.test(client))
 
 // ── 5) 端口：填完检测 + 双向同步 ──
 rec('后端有端口检测端点', /path === '\/ssh-host\/api\/port\/check'/.test(index))
@@ -215,9 +217,11 @@ rec('SshHero 组件存在', client.includes('function SshHero'))
 // 注意坐标系：pos() 是 panelSrc 切片内的偏移，hero 的挂载点在切片之前（面板第一屏），
 // 必须换算成同一坐标再比，否则永远「不在之前」。
 const panelStart = client.indexOf("h('div', { style: S.wrap }")
-rec('SSH hero 渲染在 ① 访问密钥之前（它是唯一入口）',
-  client.indexOf('h(SshHero') > 0 && client.indexOf('h(SshHero') < panelStart + pToken,
-  `hero=${client.indexOf('h(SshHero')} tokenAbs=${panelStart + pToken}`)
+// ① 已不在高级区：hero 是访问密钥的唯一入口，只要求它先于高级区折叠头即可。
+const advHeaderPos = client.indexOf('── 高级（默认收起）')
+rec('SSH hero 渲染在高级区折叠头之前（它是唯一入口）',
+  client.indexOf('h(SshHero') > 0 && client.indexOf('h(SshHero') < advHeaderPos,
+  `hero=${client.indexOf('h(SshHero')} advHeader=${advHeaderPos}`)
 rec('连接命令可一键复制（clipboard + textarea 兜底）',
   /navigator\.clipboard/.test(heroSrc) && /document\.createElement\('textarea'\)/.test(heroSrc))
 rec('复制后给出「已复制」反馈', /已复制/.test(heroSrc))
@@ -285,8 +289,9 @@ rec('高级区默认收起（readAdvOpenPref 没存过时返回 false）',
   /function readAdvOpenPref\(\)[\s\S]{0,400}?return false/.test(client))
 rec('折叠选择落盘（与日志偏好同一套 localStorage 手法）',
   /writeAdvOpenPref\(next\)/.test(client) && /dsh-ssh-host\.advOpen/.test(client))
-for (const [name, needle] of [['① 访问密钥', '① SakuraFrp 访问密钥'], ['② 隧道', '② 隧道'],
-  ['③ 本机端口', '③ 本机端口'], ['④ 访问密码', '④ 访问密码'], ['保存按钮', "busy ? '保存中…' : '保存'"],
+// ① 访问密钥已随「少填写少操作」移除（hero 是唯一入口）——不再检查它。
+for (const [name, needle] of [['② 隧道', "// ── ② 隧道 ──"],
+  ['③ 本机端口', '③ 本机端口：选了隧道才出现'], ['④ 访问密码', "'④ 访问密码'"], ['保存按钮', "busy ? '保存中…' : '保存'"],
   ['frpc 版本条', 'h(FrpcVersionBar']]) {
   const at = client.indexOf(needle)
   rec(`${name} 收在高级区内（折叠头之后、日志之前）`,

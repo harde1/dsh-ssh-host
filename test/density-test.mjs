@@ -29,7 +29,7 @@ rec('表单行用 grid 两列（标题 | 控件）', /field: \{\s*display: 'grid
 // 新建隧道表单不算在内 —— 它把名字/端口/节点/保存压成一整行，用的是纯 flex，
 // 挤进 138px 的标签列反而放不下。
 const fieldUses = (client.match(/style: S\.field/g) || []).length
-rec('四个带标签的字段都用单行版式', fieldUses >= 4, `${fieldUses} 处`)
+rec('带标签的字段都用单行版式（① 已移 hero，剩 ②③④ 与新建表单）', fieldUses >= 3, `${fieldUses} 处`)
 
 // 旧版式是「label / hint / input」三层，这里不允许再出现
 const legacy = /h\('div', \{ style: S\.label \}, '① SakuraFrp 访问密钥'\)[\s\S]{0,120}?S\.hint/.test(client)

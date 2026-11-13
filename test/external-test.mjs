@@ -25,10 +25,10 @@ rec('拒绝非绝对地址（不再静默失败）', /无法打开非绝对地�
 rec('优先宿主内置浏览器标签', /right\.openTab\('browser'/.test(body || ''))
 rec('退化 window.open', /window\.open\(target, '_blank'/.test(body || ''))
 rec('全部外链已改造', !/target: '_blank'/.test(src))
-// 6 处：① 获取密钥 / 域名提示的「绑定证书」与「绑定教程」/ 一键安装的下载说明（两处）/
-//       隧道公网地址。原来标题栏的「子域绑定」和句中的「绑定子域名」都已撤掉
-//       （前者纯多余，后者只是句子里的一串字，不需要可点）。
-rec('ExternalLink 6 处', (src.match(/h\(ExternalLink/g) || []).length === 6)
+// 5 处：域名提示的「绑定证书」与「绑定教程」/ 一键安装的下载说明（两处）/
+//       隧道公网地址。① 的「获取密钥」已随输入框移入 hero（SSH 中心卡用按钮而非外链），
+//       所以从 6 减到 5。
+rec('ExternalLink 5 处', (src.match(/h\(ExternalLink/g) || []).length === 5)
 // 「绑定证书」链到子域绑定页 —— 用户读到这句就想「那我去绑」，点它就是那一步。
 // 但「不」必须留在链接外：连成一片蓝色会读成「不去绑定证书」，意思正好反了。
 rec('「绑定证书」链到 natfrp.com/tunnel/domain',
