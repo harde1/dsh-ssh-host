@@ -47,6 +47,35 @@
 
 ---
 
+## 逐条核验卡（每条：裁决 + 依据 + 可复跑命令）
+
+### h-lgytg4 · authkey格式 —— 不确定（inconclusive）
+- **裁决**：inconclusive。ssh-keygen 半边硬支持；「Termius 可导入」半边无本机可复跑证据，归 L4/真机（task 12）。
+- **依据**：真机复核 `./test/realmachine-keycheck.sh` 六组全 PASS（PEM 头 authkey 且 0600、ssh-keygen -y 读得动、推导公钥与 authorized_keys 标记行整行 94 字节逐字节一致、三处公钥收敛唯一、双路径指纹一致）；离线 `test/ssh-host-test.mjs:57-66` 拿系统 ssh-keygen -y 当裁判（临时私钥反推公钥与 buildOpenSshPublicKey 产出整行相等）；`ssh.mjs:5-8` 只记录 PKCS8 被真机拒收，无 authkey 被接收记录；`realmachine-keycheck.sh:12` 自述答不了导入；本体 `clear/ontology/verification-loop.md:113` 归 L4。
+- **可复跑**：`./test/realmachine-keycheck.sh && node test/ssh-host-test.mjs`
+- **推翻条件**：ssh-keygen -y 读该私钥失败，或推导出的公钥与 buildOpenSshPublicKey 产出的公钥行不一致 —— 未触发。
+
+### h-d173ro · 旧密钥自愈 —— 支持（support）
+- **裁决**：support。
+- **依据**：离线 `test/ssh-host-test.mjs:659-682` (f) 块复跑绿（自愈后 /key/private publicKey==盘上 pubLine、authorized_keys 逐字节未动、二次加载幂等）；`index.js:200-207` 换封装路径不触碰 authorized_keys（唯一写入点 :1607-1628）；真机 keycheck 第 6 组 `.pkcs8.bak` 头 BEGIN PRIVATE KEY 且 32 字节 seed==现私钥 seed（6c0b077e…d424c4）。
+- **可复跑**：`node test/ssh-host-test.mjs && ./test/realmachine-keycheck.sh`
+- **推翻条件**：自愈后 /ssh/key/private 返回的 publicKey 与盘上 .pub 不同，或 authorized_keys 内容被改写 —— 未触发。
+
+### h-itrupt · 零操作链 —— 支持（support）
+- **裁决**：support（自动化引擎 4cd081e 上交付树后由 inconclusive 升格）。
+- **依据**：`client.js:2213-2229` 两自动 effect（sshdUp&&!key→createKey({auto:true})；sshdUp&&key&&!sshTunnelId&&hasToken→createTunnel({auto:true})），`:2257-2297` opts.auto 统一上锁/解锁（自动只试一次、手动/重试解锁）；后端 `index.js:1671-1698` 节点三级回退、`:1726` local_port 恒 22、`:1736-1745` 建隧道自动置 enabled+startAll；执行测试 `test/ssh-host-test.mjs` 块「自动化」「自动化2」+ `test/order-test.mjs` §15b 断言。
+- **可复跑**：`npm test`（order 123/123、ssh-host 116/116）
+- **推翻条件**：自动化链中任一环节仍要求用户提供数值（节点/端口）或需二次点击「开启」拉起 frpc —— 未触发。
+- **scope_limit**：客户端 effect 真浏览器实fire行为只有结构断言+服务端路由执行测试支撑，无浏览器级执行证据（已登记，不降级）。
+
+### h-tlz0tt · UI契约不破 —— 支持（support）
+- **裁决**：support。
+- **依据**：五套件 HEAD 复跑全绿零失败（order/progressive/density/scroll/feedback）；`test/order-test.mjs` §16 折叠边界断言复跑绿（折叠头 client.js:1444、readAdvOpenPref 默认收起、①②③④/保存/frpc 版本条在折叠头与日志锚之间、FrpcInstallCard 与日志在区外）。
+- **可复跑**：`npm test`（五套件全绿）+ `node test/order-test.mjs`（123/123）
+- **推翻条件**：上述任一套件出现无法归因到新契约的失败，或高级区折叠后丢失原有可操作项 —— 未触发。
+- **scope_limit**：density 两条像素预算本机 SKIP（无 Edge/Chrome，test/density-test.mjs:83-85）；真浏览器折叠点击无执行证据（已登记，不构成推翻）。
+
+---
 ## 附：c313dc3 之后的材料变化复核（lead 说明，非独立评估）
 
 评估者 9dd958a9 的两轮裁决基于 HEAD=2cb04b5。其后并行写入者 567c1736 推送了 c313dc3
