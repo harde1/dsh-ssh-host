@@ -242,17 +242,32 @@ rec('有防重复触发的自动锁', /const autoLock = useRef\(false\)/.test(he
 rec('自动生成密钥只试一次（tried ref）', /const keyAutoTried = useRef\(false\)/.test(heroSrc))
 rec('自动建隧道只试一次（tried ref）', /const tunnelAutoTried = useRef\(false\)/.test(heroSrc))
 rec('自动生成密钥的 effect 存在且带 sshd / 密钥条件',
-  /if \(!isMac \|\| ssh\?\.sshdUp !== true \|\| Boolean\(ssh\?\.key\) \|\| keyAutoTried\.current\) return\n\s+void createKey\(\)/.test(heroSrc))
+  /if \(!isMac \|\| ssh\?\.sshdUp !== true \|\| Boolean\(ssh\?\.key\) \|\| keyAutoTried\.current\) return\n\s+void createKey\(\{ auto: true \}\)/.test(heroSrc))
 rec('自动建隧道的 effect 存在且带隧道 / 访问密钥条件',
-  /if \(ch\.hasToken === false \|\| tunnelAutoTried\.current\) return\n\s+void createTunnel\(\)/.test(heroSrc))
-rec('自动推进时有「正在自动生成密钥」叙事', /正在自动生成密钥…/.test(heroSrc))
-rec('自动推进时有「正在自动创建隧道」叙事', /正在自动创建隧道…/.test(heroSrc))
+  /if \(ch\.hasToken === false \|\| tunnelAutoTried\.current\) return\n\s+void createTunnel\(\{ auto: true \}\)/.test(heroSrc))
+rec('自动生成密钥的叙事与按钮状态联动（busy==key 时出现）',
+  /busy === 'key'\n\s*\? '正在自动生成密钥…/.test(heroSrc))
+rec('自动创建隧道的叙事不再依赖已删除的 autoStep 状态',
+  !/autoStep/.test(heroSrc))
+rec('自动创建隧道的叙事与 busy 联动', /'正在自动创建隧道…（节点由系统自动选定,建好自动开启通道）'/.test(heroSrc))
 rec('自动建隧道失败时给出原因', /自动建隧道没成功:/.test(heroSrc))
 rec('失败后有显式「重试」按钮（不无限重试）', /'重试'/.test(heroSrc))
-rec('重试会解除 tried 锁再走同一条路',
-  /tunnelAutoTried\.current = false[\s\S]{0,120}?void createTunnel\(\)/.test(heroSrc))
+// 缘由：早先写成「onClick 里手动把 tried 置 false」，后来把解锁收进 createKey /
+// createTunnel 的 opts.auto 参数 —— 自动调用上锁、手动点击解锁，两种入口共享同一段
+// 加锁逻辑，不会再出现「点了按钮却还被锁挡住」的偏差。
+rec('自动与手动共用一套加锁逻辑（auto 传参区分上锁/解锁）',
+  /keyAutoTried\.current = opts\.auto \? true : false/.test(heroSrc)
+  && /tunnelAutoTried\.current = opts\.auto \? true : false/.test(heroSrc))
+rec('自动引擎调用时显式标 auto（防止异步期间被轮询重复触发）',
+  /void createKey\(\{ auto: true \}\)/.test(heroSrc) && /void createTunnel\(\{ auto: true \}\)/.test(heroSrc))
+// 缘由：早先断言 `void createKey()` 的位置，但它同时命中手动按钮那处调用；改成
+// 只认带 { auto: true } 的引擎调用点。另外不能直接找 `if (!ssh) return null` 字面量 ——
+// 自动化 effect 的说明注释里就引用了这行代码，会把注释当成早退位置；这里改用
+// effect 回调本身当左边界，它必然在早退语句之前。
 rec('自动化 effect 排在 ssh 早退之前（hook 顺序不能随加载态变化）',
-  heroSrc.indexOf('void createKey()') < heroSrc.indexOf('if (!ssh) return null'))
+  heroSrc.indexOf('if (!isMac || ssh?.sshdUp !== true || Boolean(ssh?.key) || keyAutoTried.current) return') > 0
+    && heroSrc.indexOf('if (!isMac || ssh?.sshdUp !== true || Boolean(ssh?.key) || keyAutoTried.current) return')
+      < heroSrc.lastIndexOf('if (!ssh) return null'))
 
 // ── 16) 「高级」区：遗留 UI 整段收起，默认关，功能项一个不少 ──
 // 折叠头在 frpc 版本条之前，容器闭合在日志锚点之前 —— 用这两条边界判断

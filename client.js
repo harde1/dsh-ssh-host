@@ -2214,16 +2214,19 @@ body[data-sshhost-mode="narrow"] button[aria-label="SSH 主机"] > .sshhost-swit
       // 依赖全是布尔值：8s 轮询会换新的 ssh 对象，按对象依赖会让 effect 每次重跑；
       // 这里只看「缺不缺这一步」，状态没变就不动作。每步只自动试一次（见 createKey /
       // createTunnel 里的 tried ref），失败停在原因 + 手动出口，绝不无限重试。
+      // ⚠️ createKey / createTunnel 定义在本函数更下面，这里是刻意的向前引用：
+      //    effect 回调在渲染提交后才执行，那时 const 早已初始化；但 effect 本身
+      //    必须留在 `if (!ssh) return null` 之前（hook 调用顺序不能随加载态变化）。
       useEffect(() => {
         if (!isMac || ssh?.sshdUp !== true || Boolean(ssh?.key) || keyAutoTried.current) return
-        void createKey()
+        void createKey({ auto: true })
       }, [isMac, Boolean(ssh?.sshdUp), Boolean(ssh?.key)])
 
       useEffect(() => {
         if (!isMac || ssh?.sshdUp !== true || !ssh?.key || ssh?.sshTunnelId) return
         // 没填访问密钥时后端只会回 no-token，白打一次接口 —— 等用户填完（hasToken 变真）再自动建
         if (ch.hasToken === false || tunnelAutoTried.current) return
-        void createTunnel()
+        void createTunnel({ auto: true })
       }, [isMac, Boolean(ssh?.sshdUp), Boolean(ssh?.key), Boolean(ssh?.sshTunnelId), ch.hasToken === true])
 
       if (!ssh) return null   // 首次加载不占位,避免闪一块空卡
@@ -2250,24 +2253,24 @@ body[data-sshhost-mode="narrow"] button[aria-label="SSH 主机"] > .sshhost-swit
       }
 
       /**
-       * 生成密钥：自动化与手动按钮走同一条路。
-       * 自动触发时把叙事写进 autoStep（「正在自动生成密钥…」），手动点击时清掉
-       * keyAutoTried 让自动引擎重新有资格跑（用户主动重试 = 明确意愿）。
+       * 生成密钥：自动化与手动按钮走同一条路，只有「要不要上锁」不同。
+       * @param {{auto?:boolean}} opts auto=true 由自动化引擎调用：先看锁，再把锁上住
+       *   （异步期间 ssh.key 还是旧的 null，不上锁会被 8s 轮询重复触发）；
+       *   手动点击（auto 缺省）先解锁，用户主动点 = 明确要再试一次。
        */
-      const createKey = async () => {
+      const createKey = async (opts = {}) => {
         if (autoLock.current) return
         autoLock.current = true
-        keyAutoTried.current = true   // 无论成败，本次挂载不再自动重来
+        keyAutoTried.current = opts.auto ? true : false
         setBusy('key'); setMsg('')
         try {
           const r = await post('/ssh/key/create')
           setMsg(KEY_MSG[r.action] ?? `✓ 密钥已就绪(${r.action ?? '未知结果'})`)
           void load()   // 立即刷新密钥摘要/四态，不等 8s 轮询
         } catch (e) {
-          setMsg(`密钥自动生成失败:${e.message}。稍后可再点「生成 SSH 密钥」手动重试。`)
+          setMsg(`密钥生成失败:${e.message}。可以再点一次「生成 SSH 密钥」。`)
         } finally {
           autoLock.current = false
-          setAutoStep('')
           setBusy('')
         }
       }
@@ -2276,12 +2279,14 @@ body[data-sshhost-mode="narrow"] button[aria-label="SSH 主机"] > .sshhost-swit
        * 建 SSH 隧道：节点由后端三级回退自动选定，建好后后端会自动拉起通道，
        * 所以用户「点一下」就是终点。自动路径只试一次 —— 失败把原因留在
        * tunnelAutoErr 里并显示「重试」按钮，不无限重试。
+       * @param {{auto?:boolean}} opts 同 createKey：auto=true 由引擎调用（先看锁再上锁），
+       *   手动点击（含「重试」）先解锁，允许再来一次。
        */
-      const createTunnel = async () => {
+      const createTunnel = async (opts = {}) => {
         if (autoLock.current) return
         autoLock.current = true
-        tunnelAutoTried.current = true
-        setBusy('tunnel'); setMsg(''); setTunnelAutoErr(''); setAutoStep('正在自动创建隧道…')
+        tunnelAutoTried.current = opts.auto ? true : false
+        setBusy('tunnel'); setMsg(''); setTunnelAutoErr('');
         try {
           const r = await post('/ssh/tunnel/create', {})
           setMsg(r.warning ? `⚠ ${r.warning}` : '✓ SSH 隧道已创建,通道已自动开启,等 frpc 连上即可')
@@ -2291,7 +2296,6 @@ body[data-sshhost-mode="narrow"] button[aria-label="SSH 主机"] > .sshhost-swit
           setMsg('')
         } finally {
           autoLock.current = false
-          setAutoStep('')
           setBusy('')
         }
       }
@@ -2413,7 +2417,7 @@ body[data-sshhost-mode="narrow"] button[aria-label="SSH 主机"] > .sshhost-swit
                     : '自动生成一把专用于 SSH 连入的密钥：公钥写进本机 ~/.ssh/authorized_keys,私钥导出到手机。'),
                 h('button', {
                   type: 'button', style: busy === 'key' ? { ...S.btn, opacity: 0.6 } : S.btn,
-                  disabled: busy === 'key', onClick: createKey,
+                  disabled: busy === 'key', onClick: () => void createKey(),
                 }, busy === 'key' ? '生成中…' : '生成 SSH 密钥'))
               : needTunnel
                 ? h('div', { style: { display: 'flex', flexDirection: 'column', gap: '6px' } },
@@ -2428,19 +2432,11 @@ body[data-sshhost-mode="narrow"] button[aria-label="SSH 主机"] > .sshhost-swit
                     tunnelAutoErr
                       ? h('button', {
                         type: 'button', style: S.btn,
-                        disabled: busy === 'tunnel', onClick: () => {
-                          tunnelAutoTried.current = false
-                          setTunnelAutoErr('')
-                          void createTunnel()
-                        },
+                        disabled: busy === 'tunnel', onClick: () => void createTunnel(),
                       }, busy === 'tunnel' ? '创建中…' : '重试')
                       : h('button', {
                         type: 'button', style: busy === 'tunnel' ? { ...S.btn, opacity: 0.6 } : S.btn,
-                        disabled: busy === 'tunnel', onClick: () => {
-                          tunnelAutoTried.current = false   // 手动点 = 明确意愿，允许再自动试一次
-                          setTunnelAutoErr('')
-                          void createTunnel()
-                        },
+                        disabled: busy === 'tunnel', onClick: () => void createTunnel(),
                       }, busy === 'tunnel' ? '创建中…' : '一键建立 SSH 隧道')))
                 : h('div', { style: { display: 'flex', flexDirection: 'column', gap: '6px' } },
                   ssh.connectCmd
