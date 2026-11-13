@@ -23,7 +23,7 @@
   ok   fresh-install-test.mjs     10/10
   ok   gate-redirect-test.mjs     12/12
   ok   installer-test.mjs         52/52
-  ok   order-test.mjs             110/110
+  ok   order-test.mjs             121/121
   ok   paths-test.mjs             51/51
   ok   progressive-test.mjs       59/59
   ok   scroll-test.mjs            14/14
@@ -37,8 +37,8 @@
   ok   update-check-test.mjs      15/15
   ok   verify.mjs                 36/36
 
-全部通过：873/873 项，26 个套件
-(README 数字与实跑一致：873 项 / 26 个套件)
+全部通过：884/884 项，26 个套件
+(README 数字与实跑一致：884 项 / 26 个套件)
 ```
 
 ## 2) 真机私钥复核（只读）
@@ -105,5 +105,5 @@ $ sed -n '2174,2521p' client.js | grep -c "密码"   # SSH 卡片函数体（判
 |---|---|---|
 | u-163aif / u-6onejm | density 像素预算 SKIP（本机无 Edge/Chrome）被重复登记了两次 | explained：同一读数重复登记，无第二事实 |
 | u-kniy6z | 预览夹具里「高级」区永远展开、①②③④ 全可见 | explained：夹具 mini-React 不支持惰性 useState(fn)，把函数本体当初值（恒真）；已修 slotOf，加 PREVIEW_VARIANT=adv 复验 |
-| u-qnf13x | README 声明 873 项 vs 核对报「实跑 763」 | explained：763 = 873 − order-test 的 110，核对代码只在成功分支记 actual，order-test 自己红时它的项数凭空消失，报出假差值；已移出分支并人为改 999 复现验证 |
+| u-qnf13x | README 声明 873 项 vs 核对报「实跑 763」 | explained：763 = 873 − order-test 的 110（当时 order-test 为 110 项），核对代码只在成功分支记 actual，order-test 自己红时它的项数凭空消失，报出假差值；已移出分支并人为改 999 复现验证 |
 
