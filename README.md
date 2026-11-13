@@ -322,6 +322,23 @@ PREVIEW_VARIANT=adv   node preview-render.mjs .preview/adv.html   # 高级区展
 NATFRP_TOKEN='你的密钥' node test/verify.mjs
 ```
 
+**真机私钥复核**(唯一不能离线回答的问题:这台机器上那把真密钥到底是什么状态):
+
+```bash
+./test/realmachine-keycheck.sh      # 只读,不写任何文件、不改 authorized_keys
+```
+
+它比 `npm test` 强的地方在于对象不同:离线套件用临时目录里的**假密钥**证明编码逻辑
+自洽,这个脚本证明**本机这把真密钥**处于修好后的状态 —— PEM 头是 authkey、权限 0600、
+`ssh-keygen -y` 读得动、推出的公钥与 `~/.ssh/authorized_keys` 标记行**整行逐字节一致**
+(94 字节,含注释)、三处公钥收敛为一个、两条路径指纹相同,并拿 `.pkcs8.bak` 的
+32 字节 seed 与现私钥比(**seed 相同才说明自愈只换了封装、没换密钥**)。
+用 `ssh-keygen -y` 去比备份是比不了的:PKCS8 那份它本来就拒读,那正是当年 Termius
+拒收的同一个原因,所以这里改比 seed。
+
+> 它回答不了「Termius 里点导入会不会成功」—— 那是手机端外部程序的行为,只能真机验
+> (见「已知边界」)。脚本能证的是:格式已是 OpenSSH 原生认的封装,且服务端已配好。
+
 ---
 
 ## 与上游的关系
