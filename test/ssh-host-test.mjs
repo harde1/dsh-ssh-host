@@ -412,6 +412,23 @@ rec('ETIMEDOUT → 未就绪', parseSshdProbeResult('ETIMEDOUT') === false)
     rec('快照不带 sshdUp（4s 轮询不做 TCP 探测）',
       !('sshdUp' in (snap0.body ?? {})) && !('sshSshdUp' in (snap0.body ?? {})))
 
+    // ── hero 卡要的通道状态:/ssh/state 里带 channel（enabled / running / hasToken）──
+    // 前端 hero 卡是 SSH 的唯一入口,必须能显示「通道开着但 frpc 没在跑」这类
+    // 组合态,并据此决定按钮文案;这些字段都是内存/配置读取,不新增网络探测。
+    {
+      const chState = await getJSON(B, '/ssh-host/api/ssh/state')
+      const ch = chState.body?.channel
+      rec('/ssh/state.channel 带 enabled/running/hasToken 三态布尔',
+        ch && typeof ch.enabled === 'boolean' && typeof ch.running === 'boolean'
+        && typeof ch.hasToken === 'boolean', JSON.stringify(ch))
+      rec('/ssh/state.channel.enabled 与快照 enabled 一致（同一个权威变量）',
+        ch?.enabled === snap0.body?.enabled, `channel=${ch?.enabled} snap=${snap0.body?.enabled}`)
+      rec('/ssh/state.channel.hasToken=true（本 box 凭据桩给了 FAKE-TOKEN）',
+        ch?.hasToken === true, String(ch?.hasToken))
+      rec('/ssh/state.channel.running=false（enabled=false 时 frpc 没被拉起）',
+        ch?.running === false, String(ch?.running))
+    }
+
     // ── (b) sshd 未监听 → 409 sshd-down ──
     setSshdProberForTests(async () => false)
     const down = await postJSON(B, '/ssh-host/api/ssh/tunnel/create', { node: 7 })

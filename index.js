@@ -1575,6 +1575,11 @@ export function apply(ctx, config = {}) {
         } catch { /* 拉不到就如实显示「未连」 */ }
       }
       const user = osUserInfo().username
+      // 通道状态给 hero 卡用:hero 是 SSH 的唯一入口,必须能区分
+      // 「没填密钥 / 开关关着 / 开着但 frpc 掉线」三种「连不上」,文案才不至于误导。
+      // 都是本地读取(内存变量 + 凭据库 resolve),不新增网络往返与 TCP 探测。
+      const tokenForState = await resolveToken()
+      const frpcSnap = frpc.snapshot()
       json(res, 200, {
         platform: process.platform,
         // macOS 内核主版本(Darwin 22 = macOS 13 Ventura 起「系统设置」换新架构),
@@ -1586,6 +1591,11 @@ export function apply(ctx, config = {}) {
         key: hostKey ? { fingerprint: sshFingerprintOf(hostKey.publicKey), hasPrivate: true } : null,
         sshTunnelId,
         tunnel,
+        channel: {
+          enabled: Boolean(enabled),
+          running: Boolean(frpcSnap?.running),
+          hasToken: Boolean(tokenForState),
+        },
         user,
         connectCmd: tunnel?.remote && tunnel?.nodeHost
           ? buildConnectCommand(user, tunnel.nodeHost, tunnel.remote)

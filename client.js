@@ -218,6 +218,17 @@ window.__ModuleLoader__.load({
       err: { fontSize: '12px', color: '#dc2626', whiteSpace: 'pre-wrap', wordBreak: 'break-word' },
       ok: { fontSize: '12px', color: '#16a34a' },
       divider: { height: '1px', background: 'var(--dsw-alias-border-l1, #e5e7eb)' },
+      // SSH 中心卡：整页唯一的主角，故意做成「有边有底的卡片」而不是上游那种
+      // 一行行裸 flex —— 锁定设计要求界面不与上游过于相似，第一眼就知道这是
+      // 「把本机变成 SSH 主机」的入口。
+      hero: {
+        display: 'flex', flexDirection: 'column', gap: '10px',
+        padding: '14px 16px', borderRadius: '10px',
+        border: '1px solid var(--dsw-alias-border-l1, #d0d5dd)',
+        background: 'var(--dsw-alias-bg-layer-2, #fbfcfe)',
+      },
+      heroSub: { fontSize: '12px', opacity: 0.62, lineHeight: 1.5, marginTop: '2px' },
+      actionRow: { display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' },
       code: {
         fontFamily: 'ui-monospace,SFMono-Regular,Menlo,monospace', fontSize: '12px',
         background: 'rgba(127,127,127,.1)', padding: '1px 5px', borderRadius: '4px',
@@ -1406,6 +1417,10 @@ window.__ModuleLoader__.load({
         // placeholder 配色跟着主题 token 走（见 FIELD_CSS 注释）
         h('style', null, FIELD_CSS),
 
+        // ── SSH 中心卡：整页主角,第一眼就看到（唯一入口,独立 8s 轮询;
+        //    按「还缺什么」只给一个主动作,其余配置全在下方「高级」区）──
+        h(SshHero),
+
         // ── frpc 缺失时的安装引导（置顶，最显眼）──
         h(FrpcInstallCard, { inst: st.frpcInstall, onDone: () => void loadState() }),
 
@@ -1871,9 +1886,6 @@ window.__ModuleLoader__.load({
 
         h('div', { style: S.divider }),
 
-        // ── SSH 远程访问(四态渐进解锁,独立 8s 轮询)──
-        h(SshPanel),
-
         // ── 日志 ──
         // 不再单独加分割线：按钮本身就是边界，多一条线多占一行高度
         // ⚠️ 日志现在默认展开且每 2s 刷新，所以必须限高：frpc 跑久了能写几千行，
@@ -2114,12 +2126,24 @@ body[data-sshhost-mode="narrow"] button[aria-label="SSH 主机"] > .sshhost-swit
     //
     // 轮询节奏:这里独立 8s 拉 /ssh/state。面板主体的 4s 快照轮询不做 TCP 探测,
     // sshd 探测(真连一次 127.0.0.1:22)的开销只由这条更慢的轮询承担。
-    function SshPanel() {
+    /**
+     * SSH 中心卡 —— 整页唯一的主角。
+     *
+     * 设计约束（锁定设计）：
+     *   · 「化繁为简」：主界面只回答一件事 —— 现在能不能 SSH 连进来、下一条该做什么。
+     *     每屏只留一个主动作按钮，其余（节点、端口、隧道列表、frpc 版本）都在「高级」区。
+     *   · 纯密钥认证：这张卡里不出现「密码」二字。DSH 网页入口那套凭据属于高级区，
+     *     与 SSH 连入无关（SSH 流量走 TCP 隧道直达 22 端口，不经过插件的 HTTP 门）。
+     *   · 不与上游相似：卡片化 + 徽标行 + 连接命令大字块，而不是上游的一行行裸 flex。
+     */
+    function SshHero() {
       const [ssh, setSsh] = useState(null)
       const [busy, setBusy] = useState('')
       const [msg, setMsg] = useState('')
       const [showPriv, setShowPriv] = useState(false)
       const [privKey, setPrivKey] = useState('')
+      const [copied, setCopied] = useState(false)
+      const [tokenDraft, setTokenDraft] = useState('')
       const mounted = useRef(true)
 
       const load = useCallback(async () => {
@@ -2139,10 +2163,24 @@ body[data-sshhost-mode="narrow"] button[aria-label="SSH 主机"] > .sshhost-swit
       if (!ssh) return null   // 首次加载不占位,避免闪一块空卡
 
       const isMac = ssh.platform === 'darwin'
+      // 通道状态：hero 是 SSH 的唯一入口,必须能区分三种「连不上」——
+      //   没填访问密钥 / 开关关着 / 开着但 frpc 掉线。文案才不至于误导。
+      const ch = ssh.channel ?? {}
+      const channelOn = ch.enabled === true
+      const online = ssh.tunnel?.online === true
+
+      // 系统设置「共享」面板深链按内核主版本选：Darwin 22(macOS 13 Ventura)起
+      // 换新架构,旧 anchor com.apple.preferences.sharing 在新面板上点了没反应。
+      const sharingUrl = Number(ssh.darwinMajor) >= 22
+        ? 'x-apple.systempreferences:com.apple.Sharing-Settings.extension'
+        : 'x-apple.systempreferences:com.apple.preferences.sharing?Services'
+      const openSharing = () => {
+        try { location.href = sharingUrl } catch { /* 没有该 scheme 就静默,按提示手点 */ }
+      }
 
       // 生成结果按服务端 action 三态区分(不是布尔 added):
       //   created   新密钥新条目;unchanged 同一把钥匙已在;
-      //   replaced  旧条目被换掉 —— 必须提醒手机端重新导入新私钥,否则 SSH 连不上。
+      //   replaced  旧条目被换掉 —— 必须提醒手机端重新导入新私钥,否则连不上。
       const KEY_MSG = {
         created: '✓ 密钥已生成,公钥已写入 authorized_keys',
         unchanged: '✓ 密钥已存在,无需重复生成',
@@ -2193,101 +2231,179 @@ body[data-sshhost-mode="narrow"] button[aria-label="SSH 主机"] > .sshhost-swit
         finally { setBusy('') }
       }
 
-      // 态判定(按解锁顺序短路;sshdUp 是服务端真 TCP 探测的结果)
-      const platformBlock = !isMac
-      const sshdBlock = isMac && !ssh.sshdUp
-      const keyBlock = ssh.sshdUp && !ssh.key
-      const tunnelBlock = ssh.key && !ssh.sshTunnelId
+      /**
+       * 复制连接命令 —— 手机端最常用的一步。
+       * 优先 navigator.clipboard；非安全上下文（http://127.0.0.1 之外的 IP 访问、
+       * 老内核）里它会抛错或返回 rejected，所以必须有 textarea + execCommand 兜底,
+       * 否则「一键复制」在最需要它的局域网场景里就是死的。
+       */
+      const copyCmd = async () => {
+        const text = ssh.connectCmd || ''
+        if (!text) return
+        let ok = false
+        try {
+          if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
+            await navigator.clipboard.writeText(text)
+            ok = true
+          }
+        } catch { /* 落回兜底 */ }
+        if (!ok) {
+          try {
+            const ta = document.createElement('textarea')
+            ta.value = text
+            ta.setAttribute('readonly', '')
+            ta.style.position = 'fixed'
+            ta.style.opacity = '0'
+            document.body.appendChild(ta)
+            ta.select()
+            ok = document.execCommand ? document.execCommand('copy') : false
+            document.body.removeChild(ta)
+          } catch { ok = false }
+        }
+        if (ok) {
+          setCopied(true)
+          setTimeout(() => mounted.current && setCopied(false), 2000)
+        } else {
+          // 两种办法都失败时不假装成功：命令块本身已 userSelect:all,提示手动选。
+          setMsg('这条浏览器不允许网页写剪贴板：直接选中下面那行复制即可')
+        }
+      }
 
-      return h('div', { style: { ...S.field, gridTemplateColumns: '1fr', gap: '8px' } },
-        h('div', { style: { ...S.row, gap: '10px' } },
-          h('div', { style: S.label }, 'SSH 远程访问'),
+      const saveToken = async () => {
+        const v = tokenDraft.trim()
+        if (!v) { setMsg('先粘贴 SakuraFrp 访问密钥'); return }
+        setBusy('token'); setMsg('')
+        try {
+          await post('/config', { token: v })
+          setTokenDraft('')
+          setMsg('✓ 访问密钥已保存,正在自动建隧道')
+          void load()
+        } catch (e) { setMsg(`保存失败:${e.message}`) }
+        finally { setBusy('') }
+      }
+
+      // ── 一条主动作：按「还缺什么」给唯一那个按钮,其余信息收进徽标行 ──
+      const needToken = isMac && ch.hasToken === false
+      const needSshd = isMac && ch.hasToken !== false && ssh.sshdUp !== true
+      const needKey = isMac && ssh.sshdUp === true && !ssh.key
+      const needTunnel = isMac && ssh.sshdUp === true && ssh.key && !ssh.sshTunnelId
+
+      const badge = (ok, text, warn) => h('span', { style: warn && !ok ? S.badgeWarn : S.badge(ok) }, text)
+
+      const stepMain = !isMac
+        ? h('div', { style: S.warn },
+          '当前阶段 SSH 主机功能仅支持 macOS（需要系统 sshd）。Windows 的 OpenSSH Server 在路线图上。')
+        : needToken
+          ? h('div', { style: { display: 'flex', flexDirection: 'column', gap: '6px' } },
+            h('div', { style: S.heroSub }, '第 1 步 · 粘贴 SakuraFrp 访问密钥（控制台 → 密钥管理）。之后全部自动。'),
+            h('div', { style: { display: 'flex', gap: '8px' } },
+              // type:'password' 是输入掩码（访问密钥属敏感凭据，不该在屏幕上明文可见），
+              // 不代表「SSH 走口令认证」——SSH 连入本身仍是纯密钥认证。
+              h('input', {
+                style: { ...S.input, flex: '1 1 240px' }, type: 'password',
+                placeholder: '粘贴访问密钥', value: tokenDraft,
+                onChange: (e) => setTokenDraft(e.target.value),
+              }),
+              h('button', {
+                type: 'button', style: busy === 'token' ? { ...S.btn, opacity: 0.6 } : S.btn,
+                disabled: busy === 'token', onClick: saveToken,
+              }, busy === 'token' ? '保存中…' : '保存并继续')))
+          : needSshd
+            ? h('div', { style: { display: 'flex', flexDirection: 'column', gap: '6px' } },
+              h('div', { style: S.warn },
+                '还差本机远程登录：打开「系统设置 → 通用 → 共享 → 远程登录」，或复制下面命令执行。'),
+              h('div', { style: S.actionRow },
+                h('button', { type: 'button', style: S.btn, onClick: openSharing }, '打开系统设置'),
+                h('span', { style: S.code, userSelect: 'all' }, 'sudo systemsetup -setremotelogin on'),
+                h('span', { style: S.heroSub }, '开启后 ≤8 秒自动识别,无需刷新。')))
+            : needKey
+              ? h('div', { style: { display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' } },
+                h('div', { style: { ...S.heroSub, flex: '1 1 240px' } },
+                  '自动生成一把专用于 SSH 连入的密钥：公钥写进本机 ~/.ssh/authorized_keys,私钥导出到手机。'),
+                h('button', {
+                  type: 'button', style: busy === 'key' ? { ...S.btn, opacity: 0.6 } : S.btn,
+                  disabled: busy === 'key', onClick: createKey,
+                }, busy === 'key' ? '生成中…' : '生成 SSH 密钥'))
+              : needTunnel
+                ? h('div', { style: { display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' } },
+                  h('div', { style: { ...S.heroSub, flex: '1 1 240px' } },
+                    '自动建一条 TCP 隧道直连本机 22 端口：节点由系统自动选定,建好自动开启通道。'),
+                  h('button', {
+                    type: 'button', style: busy === 'tunnel' ? { ...S.btn, opacity: 0.6 } : S.btn,
+                    disabled: busy === 'tunnel', onClick: createTunnel,
+                  }, busy === 'tunnel' ? '创建中…' : '一键建立 SSH 隧道'))
+                : h('div', { style: { display: 'flex', flexDirection: 'column', gap: '6px' } },
+                  ssh.connectCmd
+                    ? h('div', { style: S.actionRow },
+                      h('code', {
+                        style: { ...S.code, flex: '1 1 auto', padding: '6px 9px', fontSize: '13px', userSelect: 'all' },
+                      }, ssh.connectCmd),
+                      h('button', {
+                        type: 'button',
+                        style: copied ? { ...S.btn, background: '#16a34a' } : S.btn,
+                        onClick: copyCmd,
+                      }, copied ? '已复制 ✓' : '复制连接命令'))
+                    : h('div', { style: S.heroSub },
+                      ssh.tunnel?.remote
+                        ? '等 frpc 连上节点后显示连接命令。'
+                        : '隧道已建,等官方分配到远程端口后显示连接命令。'),
+                  !online
+                    ? h('div', { style: S.warn },
+                      channelOn ? '隧道还没连上：刚建好等几秒自动重连；反复不掉线请到「高级」区看日志。'
+                        : '通道目前是关闭的：打开上面的开关即可拉起 frpc。')
+                    : null,
+                  h('div', { style: S.actionRow },
+                    h('button', {
+                      type: 'button', style: { ...S.btnGhost, fontSize: '12px' },
+                      onClick: revealPrivate,
+                    }, showPriv ? '收起私钥' : '私钥 → 导入手机（Termius）'),
+                    h('button', {
+                      type: 'button', style: { ...S.btnGhost, fontSize: '12px' },
+                      disabled: busy === 'remove', onClick: removeTunnel,
+                    }, busy === 'remove' ? '删除中…' : '删除隧道')),
+                  showPriv && privKey
+                    ? h('pre', {
+                      style: {
+                        marginTop: '2px', padding: '8px 10px', borderRadius: '6px',
+                        background: 'rgba(127,127,127,.08)', fontSize: '11px', lineHeight: 1.5,
+                        whiteSpace: 'pre-wrap', wordBreak: 'break-all', userSelect: 'all',
+                      },
+                    }, privKey)
+                    : null,
+                  showPriv && privKey
+                    ? h('div', { style: S.heroSub },
+                      '整段复制(含 BEGIN/END 行),在 Termius 里 Keychain → + → Import 保存,主机认证选这把钥匙。')
+                    : null)
+
+      return h('div', { style: S.hero },
+        h('div', { style: { display: 'flex', alignItems: 'flex-start', gap: '10px' } },
+          h('div', { style: { flex: '1 1 auto' } },
+            h('div', { style: { ...S.label, fontSize: '15px' } }, '把这台 Mac 变成 SSH 主机'),
+            h('div', { style: S.heroSub },
+              '手机用 Termius 直连本机终端：密钥认证、节点自动选、端口自动分。')),
+          h(Toggle, {
+            on: channelOn, disabled: busy === 'switch',
+            onChange: async (v) => {
+              setBusy('switch'); setMsg('')
+              try {
+                await post(v ? '/start' : '/stop')
+                void load()
+                diagStore.setEnabled(v); diagStore.kick()
+              } catch (e) { setMsg(`切换失败:${e.message}`) }
+              finally { setBusy('') }
+            },
+          })),
+
+        // 徽标行：一眼看到「哪一环通了」,不用读文字
+        h('div', { style: S.actionRow },
+          badge(ssh.sshdUp === true, ssh.sshdUp === true ? '远程登录已开' : '远程登录未开', true),
+          badge(channelOn, channelOn ? '通道已开' : '通道未开', true),
+          ssh.tunnel ? badge(online, online ? '隧道在线' : '隧道未连', true) : null,
           ssh.key
-            ? h('span', {
-              style: S.code, title: '手机端导入私钥后可比对这串指纹',
-            }, ssh.key.fingerprint)
+            ? h('span', { style: S.code, title: '手机端导入私钥后可比对这串指纹' }, ssh.key.fingerprint)
             : null),
 
-        platformBlock
-          ? h('div', { style: S.hint },
-            'SSH 主机功能当前阶段仅支持 macOS(需要系统 sshd)。Windows 的 OpenSSH Server 支持在路线图上。')
-          : null,
-
-        sshdBlock
-          ? h('div', { style: { display: 'flex', flexDirection: 'column', gap: '6px' } },
-            h('div', { style: S.warn },
-              '本机 sshd(远程登录)没有开启。到「系统设置 → 通用 → 共享 → 远程登录」打开,然后点重新检测。'),
-            h('div', {},
-              h('button', {
-                type: 'button', style: S.btnGhost,
-                onClick: () => {
-                  // 系统设置「共享」面板的深链;打不开就按上面的提示手点
-                  try { location.href = 'x-apple.systempreferences:com.apple.preferences.sharing?Services' }
-                  catch { /* noop */ }
-                },
-              }, '打开系统设置'),
-              ' ',
-              h('span', { style: S.hint }, '打开后等下一轮自动检测(≤8 秒),或重启设置页。')))
-          : null,
-
-        keyBlock
-          ? h('div', { style: { display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' } },
-            h('div', { style: { ...S.hint, flex: '1 1 240px' } },
-              '生成一把专用于 SSH 连入的密钥:公钥写进本机 ~/.ssh/authorized_keys,私钥导出到手机(Termius 等)。'),
-            h('button', {
-              type: 'button', style: busy === 'key' ? { ...S.btn, opacity: 0.6 } : S.btn,
-              disabled: busy === 'key', onClick: createKey,
-            }, busy === 'key' ? '生成中…' : '生成 SSH 密钥'))
-          : null,
-
-        tunnelBlock
-          ? h('div', { style: { display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' } },
-            h('div', { style: { ...S.hint, flex: '1 1 240px' } },
-              '建一条 TCP 隧道直连本机 22 端口(远程端口官方分配;SSH 流量不经过密码门,由 SSH 认证保护)。'),
-            h('button', {
-              type: 'button', style: busy === 'tunnel' ? { ...S.btn, opacity: 0.6 } : S.btn,
-              disabled: busy === 'tunnel', onClick: createTunnel,
-            }, busy === 'tunnel' ? '创建中…' : '创建 SSH 隧道'))
-          : null,
-
-        ssh.sshTunnelId && ssh.tunnel
-          ? h('div', { style: { display: 'flex', flexDirection: 'column', gap: '6px' } },
-            h('div', { style: { display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' } },
-              h('span', { style: S.badge(ssh.tunnel.online) },
-                ssh.tunnel.online ? 'SSH 隧道在线' : 'SSH 隧道未连'),
-              ssh.connectCmd
-                ? h('span', { style: { ...S.code, userSelect: 'all' } }, ssh.connectCmd)
-                : h('span', { style: S.hint }, '等隧道上线后显示连接命令(需要官方分配到远程端口)'),
-              h('button', {
-                type: 'button', style: S.btnGhost, disabled: busy === 'remove',
-                onClick: removeTunnel,
-              }, busy === 'remove' ? '删除中…' : '删除隧道')),
-            ssh.tunnel.remote && !ssh.tunnel.online
-              ? h('div', { style: S.warn },
-                '隧道建好了但还没连上:确认总开关已开、frpc 正在运行;若刚创建,等几秒自动重连。')
-              : null)
-          : null,
-
-        ssh.key
-          ? h('div', {},
-            h('button', {
-              type: 'button', style: { ...S.btnGhost, fontSize: '12px' },
-              onClick: revealPrivate,
-            }, showPriv ? '收起私钥' : '查看私钥(导入手机)'),
-            showPriv && privKey
-              ? h('pre', {
-                style: {
-                  marginTop: '6px', padding: '8px 10px', borderRadius: '6px',
-                  background: 'rgba(127,127,127,.08)', fontSize: '11px', lineHeight: 1.5,
-                  whiteSpace: 'pre-wrap', wordBreak: 'break-all', userSelect: 'all',
-                },
-              }, privKey)
-              : null,
-            showPriv && privKey
-              ? h('div', { style: { ...S.hint, marginTop: '4px' } },
-                '整段复制(含 BEGIN/END 行),在 Termius 里 Keychain → + → Import 保存,主机认证选这把钥匙。')
-              : null)
-          : null,
+        stepMain,
 
         // 失败提示一律红,警告(⚠)也红,成功提示绿 —— 判断文案内容而不是另开一个 state
         msg ? h('div', { style: /^⚠|失败/.test(msg) ? S.err : S.ok }, msg) : null)

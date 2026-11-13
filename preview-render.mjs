@@ -126,6 +126,26 @@ const NODES = {
   ],
 }
 
+// SSH 中心卡的桩数据：两种形态正好覆盖 hero 的两端 ——
+//   fresh  什么都不缺的第一步（没填访问密钥），显示 token 输入行
+//   ready  全通（隧道在线 + 连接命令），显示复制按钮与指纹
+const SSH_STATE = isFresh
+  ? {
+    platform: 'darwin', darwinMajor: 25, sshdUp: false,
+    key: null, sshTunnelId: '', tunnel: null, connectCmd: null,
+    user: 'demo-user',
+    channel: { enabled: false, running: false, hasToken: false },
+  }
+  : {
+    platform: 'darwin', darwinMajor: 25, sshdUp: true,
+    key: { fingerprint: 'SHA256:8Qz2mK…demo', hasPrivate: true },
+    sshTunnelId: '54321',
+    tunnel: { id: 54321, online: true, remote: 24567, nodeHost: 'abc123.nyat.app', node: 2 },
+    connectCmd: 'ssh demo-user@abc123.nyat.app -p 24567',
+    user: 'demo-user',
+    channel: { enabled: true, running: true, hasToken: true },
+  }
+
 globalThis.window = {
   __ModuleLoader__: { load(mod) { module_ = mod } },
   // 让 Panel 初始就把「新建隧道」表单展开，好检查节点列表的排版与配色
@@ -155,6 +175,9 @@ globalThis.fetch = async (url) => {
   // 桩里必须答「可用」，否则预览永远缺 ④ 这一步
   else if (u.includes('/ssh-host/api/port/check')) body = { port: 3083, inRange: true, available: true }
   else if (u.includes('/ssh-host/api/logs')) body = {}
+  // SSH 中心卡的数据源：不桩的话 hero 拿到空对象，platform 不是 darwin，
+  // 预览里只会显示「仅支持 macOS」，既看不到真卡片也量不到它的高度。
+  else if (u.includes('/ssh-host/api/ssh/state')) body = SSH_STATE
   return { ok: true, status: 200, json: async () => body, text: async () => '' }
 }
 

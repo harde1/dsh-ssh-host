@@ -152,6 +152,37 @@ rec('后端把 failed 当「已删但没踢下线」而不是删除失败',
 rec('删除当前隧道后清空 tunnelId 并关闭开关',
   /wasCurrent[\s\S]{0,300}?enabled = false[\s\S]{0,120}?tunnelId = ''/.test(index))
 
+// ── 15) SSH 中心（hero 卡）：用户的唯一入口，遗留隧道 UI 收进折叠的「高级」区 ──
+// 这是锁定设计的落地校验（「操作界面不要与上游过于相似」+「化繁为简，少填写少操作」）：
+//   · SSH 卡在最上面，先于任何 frpc 配置出现；
+//   · 卡内提供 一键复制连接命令 + 按内核版本选深链的远程登录按钮 + 通道开关；
+//   · SSH 路径是纯密钥认证，卡内不得出现「密码」字样（④ 那条属于 DSH 网页入口，留在高级区）。
+// 取样按真实函数体边界（到下一个组件定义为止），不用固定字符窗口：
+// 窗口截断会让「卡内零某字样」这类断言漏掉后半段的内容。
+const heroStart = client.indexOf('function SshHero')
+const heroSrc = client.slice(heroStart, client.indexOf('function NatfrpSidebarIcon', heroStart))
+rec('SshHero 组件存在', client.includes('function SshHero'))
+// 注意坐标系：pos() 是 panelSrc 切片内的偏移，hero 的挂载点在切片之前（面板第一屏），
+// 必须换算成同一坐标再比，否则永远「不在之前」。
+const panelStart = client.indexOf("h('div', { style: S.wrap }")
+rec('SSH hero 渲染在 ① 访问密钥之前（它是唯一入口）',
+  client.indexOf('h(SshHero') > 0 && client.indexOf('h(SshHero') < panelStart + pToken,
+  `hero=${client.indexOf('h(SshHero')} tokenAbs=${panelStart + pToken}`)
+rec('连接命令可一键复制（clipboard + textarea 兜底）',
+  /navigator\.clipboard/.test(heroSrc) && /document\.createElement\('textarea'\)/.test(heroSrc))
+rec('复制后给出「已复制」反馈', /已复制/.test(heroSrc))
+rec('远程登录深链按 darwinMajor 选（Ventura 起换新面板 anchor）',
+  /darwinMajor/.test(heroSrc) && /com\.apple\.Sharing-Settings\.extension/.test(heroSrc)
+  && /com\.apple\.preferences\.sharing\?Services/.test(heroSrc))
+rec('hero 卡有通道开关（复用 doToggle 语义：POST /start|/stop）',
+  /post\('\/start'\)|doToggle|onChange: \(\w+\) =>/.test(heroSrc) && /channel/.test(heroSrc))
+rec('SSH hero 卡内零「密码」字样（纯密钥认证）', !/密码/.test(heroSrc),
+  `${(heroSrc.match(/密码/g) || []).length} 处`)
+rec('hero 卡把 sshd 未开 / 无密钥 / 无隧道三种阻塞各自说清',
+  /远程登录/.test(heroSrc) && /生成|密钥/.test(heroSrc) && /隧道/.test(heroSrc))
+rec('旧版硬编码深链已不再出现在 SSH 区（改由 darwinMajor 判定）',
+  !/location\.href = 'x-apple\.systempreferences:com\.apple\.preferences\.sharing\?Services'/.test(client))
+
 const passed = results.filter(Boolean).length
 console.log(`\n${passed}/${results.length} passed`)
 setTimeout(() => process.exit(passed === results.length ? 0 : 1), 200)
