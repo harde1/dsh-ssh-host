@@ -44,3 +44,22 @@
 ### 结论
 
 **holds = yes**：交付成立，四条推翻条件未触发；目标不因此关闭。两条登记缺口（Termius 导入 L4、真浏览器折叠行为）随卡保留。
+
+---
+
+## 附：c313dc3 之后的材料变化复核（lead 说明，非独立评估）
+
+评估者 9dd958a9 的两轮裁决基于 HEAD=2cb04b5。其后并行写入者 567c1736 推送了 c313dc3
+（锁逻辑统一：createKey/createTunnel 改 `opts.auto` 传参，自动调用 `{auto:true}` 上锁、
+手动点击解锁，删除死状态 autoStep）。该提交**不改变四条裁决**：
+
+- **h-tlz0tt（UI 契约）**：c313dc3 后 `npm test` 886/886、26 套件全绿（order 123/123
+  含 §15b 更新断言、progressive 59、density 11、scroll 14、feedback 37）——五套件
+  零失败，第一推翻臂不触发；高级区折叠边界断言（§16）复跑绿。
+- **h-itrupt（零操作链）**：自动调用点仍是 `createKey({auto:true})` / `createTunnel({auto:true})`
+  （client.js:2217-2227），锁统一只是把「解锁」收进函数，自动路径行为不变。
+- **h-lgytg4 / h-d173ro**：不涉及前端锁逻辑，裁决不变。
+
+以上为 lead 对 c313dc3 影响的复核（非独立评估者复跑）；评估者 9dd958a9 未对 c313dc3
+复跑（其第二轮复核在 2cb04b5 时点完成）。如需独立复跑确认，可派新评估或由人在
+HEAD=c313dc3 上重跑 `npm test` 与 `./test/realmachine-keycheck.sh`（两条命令全部可复跑）。
