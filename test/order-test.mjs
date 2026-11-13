@@ -233,6 +233,27 @@ rec('hero 卡把 sshd 未开 / 无密钥 / 无隧道三种阻塞各自说清',
 rec('旧版硬编码深链已不再出现在 SSH 区（改由 darwinMajor 判定）',
   !/location\.href = 'x-apple\.systempreferences:com\.apple\.preferences\.sharing\?Services'/.test(client))
 
+// ── 15b) 自动化引擎：能自动的步骤全自动，用户只填一次访问密钥 ──
+// 「少填写少操作」的落地校验。这里只做结构断言（真触发过的行为验证见 reports/）：
+//   · sshd 已开 + 无密钥 → 自动 POST /ssh/key/create；
+//   · 有密钥 + 无隧道 + 访问密钥就位 → 自动 POST /ssh/tunnel/create；
+//   · 每步只自动试一次（失败停在原因 + 「重试」按钮），靠 tried ref + autoLock 保证。
+rec('有防重复触发的自动锁', /const autoLock = useRef\(false\)/.test(heroSrc))
+rec('自动生成密钥只试一次（tried ref）', /const keyAutoTried = useRef\(false\)/.test(heroSrc))
+rec('自动建隧道只试一次（tried ref）', /const tunnelAutoTried = useRef\(false\)/.test(heroSrc))
+rec('自动生成密钥的 effect 存在且带 sshd / 密钥条件',
+  /if \(!isMac \|\| ssh\?\.sshdUp !== true \|\| Boolean\(ssh\?\.key\) \|\| keyAutoTried\.current\) return\n\s+void createKey\(\)/.test(heroSrc))
+rec('自动建隧道的 effect 存在且带隧道 / 访问密钥条件',
+  /if \(ch\.hasToken === false \|\| tunnelAutoTried\.current\) return\n\s+void createTunnel\(\)/.test(heroSrc))
+rec('自动推进时有「正在自动生成密钥」叙事', /正在自动生成密钥…/.test(heroSrc))
+rec('自动推进时有「正在自动创建隧道」叙事', /正在自动创建隧道…/.test(heroSrc))
+rec('自动建隧道失败时给出原因', /自动建隧道没成功:/.test(heroSrc))
+rec('失败后有显式「重试」按钮（不无限重试）', /'重试'/.test(heroSrc))
+rec('重试会解除 tried 锁再走同一条路',
+  /tunnelAutoTried\.current = false[\s\S]{0,120}?void createTunnel\(\)/.test(heroSrc))
+rec('自动化 effect 排在 ssh 早退之前（hook 顺序不能随加载态变化）',
+  heroSrc.indexOf('void createKey()') < heroSrc.indexOf('if (!ssh) return null'))
+
 // ── 16) 「高级」区：遗留 UI 整段收起，默认关，功能项一个不少 ──
 // 折叠头在 frpc 版本条之前，容器闭合在日志锚点之前 —— 用这两条边界判断
 // 遗留项是不是真的被包住了，而不是只加了个假按钮。

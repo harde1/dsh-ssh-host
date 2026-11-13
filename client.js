@@ -2180,6 +2180,14 @@ body[data-sshhost-mode="narrow"] button[aria-label="SSH 主机"] > .sshhost-swit
       const [copied, setCopied] = useState(false)
       const [tokenDraft, setTokenDraft] = useState('')
       const mounted = useRef(true)
+      // ── 自动化引擎：能自动的步骤全自动推进，用户只填一次访问密钥 ──
+      // autoLock 防重复触发（React 18 严格模式 / 8s 轮询都会让 effect 重跑）；
+      // 两个 tried ref 保证每一步**只自动试一次**：失败就停在原因提示 + 手动出口，
+      // 绝不无限重试（否则一个持续失败的接口会把面板变成请求风暴）。
+      const autoLock = useRef(false)
+      const keyAutoTried = useRef(false)
+      const tunnelAutoTried = useRef(false)
+      const [tunnelAutoErr, setTunnelAutoErr] = useState('')
 
       const load = useCallback(async () => {
         try {
@@ -2195,12 +2203,31 @@ body[data-sshhost-mode="narrow"] button[aria-label="SSH 主机"] > .sshhost-swit
         return () => { mounted.current = false; clearInterval(t) }
       }, [load])
 
-      if (!ssh) return null   // 首次加载不占位,避免闪一块空卡
-
-      const isMac = ssh.platform === 'darwin'
+      // isMac / 通道状态必须在早退之前算好：下面的自动化 effect 要无条件调用，
+      // hook 调用顺序不能因为「这一轮还没拉到 ssh」而变少（否则 React 直接报错）。
+      const isMac = ssh?.platform === 'darwin'
       // 通道状态：hero 是 SSH 的唯一入口,必须能区分三种「连不上」——
       //   没填访问密钥 / 开关关着 / 开着但 frpc 掉线。文案才不至于误导。
-      const ch = ssh.channel ?? {}
+      const ch = ssh?.channel ?? {}
+
+      // ── 自动推进（能自动的步骤全自动，用户只填一次访问密钥）──
+      // 依赖全是布尔值：8s 轮询会换新的 ssh 对象，按对象依赖会让 effect 每次重跑；
+      // 这里只看「缺不缺这一步」，状态没变就不动作。每步只自动试一次（见 createKey /
+      // createTunnel 里的 tried ref），失败停在原因 + 手动出口，绝不无限重试。
+      useEffect(() => {
+        if (!isMac || ssh?.sshdUp !== true || Boolean(ssh?.key) || keyAutoTried.current) return
+        void createKey()
+      }, [isMac, Boolean(ssh?.sshdUp), Boolean(ssh?.key)])
+
+      useEffect(() => {
+        if (!isMac || ssh?.sshdUp !== true || !ssh?.key || ssh?.sshTunnelId) return
+        // 没填访问密钥时后端只会回 no-token，白打一次接口 —— 等用户填完（hasToken 变真）再自动建
+        if (ch.hasToken === false || tunnelAutoTried.current) return
+        void createTunnel()
+      }, [isMac, Boolean(ssh?.sshdUp), Boolean(ssh?.key), Boolean(ssh?.sshTunnelId), ch.hasToken === true])
+
+      if (!ssh) return null   // 首次加载不占位,避免闪一块空卡
+
       const channelOn = ch.enabled === true
       const online = ssh.tunnel?.online === true
 
@@ -2222,24 +2249,51 @@ body[data-sshhost-mode="narrow"] button[aria-label="SSH 主机"] > .sshhost-swit
         replaced: '✓ 密钥已重新生成:新公钥已替换旧条目,手机端需重新导入新私钥',
       }
 
+      /**
+       * 生成密钥：自动化与手动按钮走同一条路。
+       * 自动触发时把叙事写进 autoStep（「正在自动生成密钥…」），手动点击时清掉
+       * keyAutoTried 让自动引擎重新有资格跑（用户主动重试 = 明确意愿）。
+       */
       const createKey = async () => {
+        if (autoLock.current) return
+        autoLock.current = true
+        keyAutoTried.current = true   // 无论成败，本次挂载不再自动重来
         setBusy('key'); setMsg('')
         try {
           const r = await post('/ssh/key/create')
           setMsg(KEY_MSG[r.action] ?? `✓ 密钥已就绪(${r.action ?? '未知结果'})`)
-          void load()   // 立即刷新密钥摘要/四态,不等 8s 轮询
-        } catch (e) { setMsg(`密钥生成失败:${e.message}`) }
-        finally { setBusy('') }
+          void load()   // 立即刷新密钥摘要/四态，不等 8s 轮询
+        } catch (e) {
+          setMsg(`密钥自动生成失败:${e.message}。稍后可再点「生成 SSH 密钥」手动重试。`)
+        } finally {
+          autoLock.current = false
+          setAutoStep('')
+          setBusy('')
+        }
       }
 
+      /**
+       * 建 SSH 隧道：节点由后端三级回退自动选定，建好后后端会自动拉起通道，
+       * 所以用户「点一下」就是终点。自动路径只试一次 —— 失败把原因留在
+       * tunnelAutoErr 里并显示「重试」按钮，不无限重试。
+       */
       const createTunnel = async () => {
-        setBusy('tunnel'); setMsg('')
+        if (autoLock.current) return
+        autoLock.current = true
+        tunnelAutoTried.current = true
+        setBusy('tunnel'); setMsg(''); setTunnelAutoErr(''); setAutoStep('正在自动创建隧道…')
         try {
           const r = await post('/ssh/tunnel/create', {})
           setMsg(r.warning ? `⚠ ${r.warning}` : '✓ SSH 隧道已创建,通道已自动开启,等 frpc 连上即可')
-          void load()   // 立即刷新隧道摘要,不等 8s 轮询
-        } catch (e) { setMsg(`创建失败:${e.message}`) }
-        finally { setBusy('') }
+          void load()   // 立即刷新隧道摘要，不等 8s 轮询
+        } catch (e) {
+          setTunnelAutoErr(String(e.message || e))
+          setMsg('')
+        } finally {
+          autoLock.current = false
+          setAutoStep('')
+          setBusy('')
+        }
       }
 
       const removeTunnel = async () => {
@@ -2354,19 +2408,40 @@ body[data-sshhost-mode="narrow"] button[aria-label="SSH 主机"] > .sshhost-swit
             : needKey
               ? h('div', { style: { display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' } },
                 h('div', { style: { ...S.heroSub, flex: '1 1 240px' } },
-                  '自动生成一把专用于 SSH 连入的密钥：公钥写进本机 ~/.ssh/authorized_keys,私钥导出到手机。'),
+                  busy === 'key'
+                    ? '正在自动生成密钥…（公钥写进本机 ~/.ssh/authorized_keys,私钥稍后导入手机）'
+                    : '自动生成一把专用于 SSH 连入的密钥：公钥写进本机 ~/.ssh/authorized_keys,私钥导出到手机。'),
                 h('button', {
                   type: 'button', style: busy === 'key' ? { ...S.btn, opacity: 0.6 } : S.btn,
                   disabled: busy === 'key', onClick: createKey,
                 }, busy === 'key' ? '生成中…' : '生成 SSH 密钥'))
               : needTunnel
-                ? h('div', { style: { display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' } },
-                  h('div', { style: { ...S.heroSub, flex: '1 1 240px' } },
-                    '自动建一条 TCP 隧道直连本机 22 端口：节点由系统自动选定,建好自动开启通道。'),
-                  h('button', {
-                    type: 'button', style: busy === 'tunnel' ? { ...S.btn, opacity: 0.6 } : S.btn,
-                    disabled: busy === 'tunnel', onClick: createTunnel,
-                  }, busy === 'tunnel' ? '创建中…' : '一键建立 SSH 隧道'))
+                ? h('div', { style: { display: 'flex', flexDirection: 'column', gap: '6px' } },
+                  h('div', { style: { display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' } },
+                    h('div', { style: { ...S.heroSub, flex: '1 1 240px' } },
+                      tunnelAutoErr
+                        ? `自动建隧道没成功:${tunnelAutoErr}`
+                        : busy === 'tunnel'
+                          ? '正在自动创建隧道…（节点由系统自动选定,建好自动开启通道）'
+                          : '自动建一条 TCP 隧道直连本机 22 端口：节点由系统自动选定,建好自动开启通道。'),
+                    // 自动只试一次：失败后停在原因上，给一个显式「重试」而不是自己反复撞
+                    tunnelAutoErr
+                      ? h('button', {
+                        type: 'button', style: S.btn,
+                        disabled: busy === 'tunnel', onClick: () => {
+                          tunnelAutoTried.current = false
+                          setTunnelAutoErr('')
+                          void createTunnel()
+                        },
+                      }, busy === 'tunnel' ? '创建中…' : '重试')
+                      : h('button', {
+                        type: 'button', style: busy === 'tunnel' ? { ...S.btn, opacity: 0.6 } : S.btn,
+                        disabled: busy === 'tunnel', onClick: () => {
+                          tunnelAutoTried.current = false   // 手动点 = 明确意愿，允许再自动试一次
+                          setTunnelAutoErr('')
+                          void createTunnel()
+                        },
+                      }, busy === 'tunnel' ? '创建中…' : '一键建立 SSH 隧道')))
                 : h('div', { style: { display: 'flex', flexDirection: 'column', gap: '6px' } },
                   ssh.connectCmd
                     ? h('div', { style: S.actionRow },
