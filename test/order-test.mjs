@@ -69,6 +69,7 @@ rec('预填用 init.suggestPort（后端试绑的真实空闲端口）',
   /Number\.isInteger\(r\?\.suggestPort\) && r\.suggestPort >= 1024/.test(client))
 rec('用户已手动编辑时不覆盖预填', /!portDirty\.current/.test(client))
 rec('服务端已设端口时不预填', /!s\.gatePort/.test(client))
+rec('③ 未检测前提示「已自动选好可用端口」', /已自动选好一个可用端口，直接保存即可/.test(client))
 
 // ── 5) 端口：填完检测 + 双向同步 ──
 rec('后端有端口检测端点', /path === '\/ssh-host\/api\/port\/check'/.test(index))

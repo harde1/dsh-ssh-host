@@ -189,6 +189,7 @@ globalThis.fetch = async (url) => {
   else if (u.includes('/ssh-host/api/logs')) body = {}
   // SSH 中心卡的数据源：不桩的话 hero 拿到空对象，platform 不是 darwin，
   // 预览里只会显示「仅支持 macOS」，既看不到真卡片也量不到它的高度。
+  else if (u.includes('/ssh-host/api/ssh/host/init')) body = { suggestPort: 30123, currentPort: null, frpcReady: false }
   else if (u.includes('/ssh-host/api/ssh/state')) body = SSH_STATE
   return { ok: true, status: 200, json: async () => body, text: async () => '' }
 }

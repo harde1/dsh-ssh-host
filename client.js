@@ -1333,7 +1333,7 @@ window.__ModuleLoader__.load({
        */
       const doCreate = async () => {
         if (!newNode) { setCreateErr('先选一个节点'); return }
-        if (!String(newPort).trim()) { setCreateErr('再填一个端口，比如 3083'); return }
+        if (!String(newPort).trim()) { setCreateErr('③ 会自动预填端口，先确认那个数'); return }
         const p = Number(newPort)
         if (!Number.isInteger(p) || p < 1024 || p > 65535) {
           setCreateErr('端口要填 1024–65535 之间的整数')
@@ -1728,7 +1728,7 @@ window.__ModuleLoader__.load({
             ? h('div', { style: { ...S.warn, marginTop: '4px' } },
               tunnelPort
                 ? `这条隧道连本机 ${tunnelPort}，插件还没设端口 —— 到 ③ 填 ${tunnelPort} 就对上了。`
-                : '插件还没设端口，先到 ③ 填一个（比如 3083）。')
+                : '插件还没设端口 —— ③ 会自动预填一个可用端口。')
             : null,
 
           /**
