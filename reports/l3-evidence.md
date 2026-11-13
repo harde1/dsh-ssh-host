@@ -71,13 +71,13 @@
 exit=0
 ```
 
-## 3) 判据锚点（grep 实录，可复跑）
+## 3) 判据锚点（grep 实录，可复跑，已按 HEAD=4cd081e 重测）
 
 `npm test` 全绿之外，目标判据还有四条可 grep 的锚点：
 
 ```
 $ grep -n "function SshHero" client.js
-2138:      function SshHero() {
+2174:    function SshHero() {
 
 $ grep -cn "复制连接命令\|打开系统设置" client.js
 2
@@ -86,17 +86,18 @@ $ grep -n "── 高级（默认收起）" client.js
 1443:        // ── 高级（默认收起）：遗留的 DSH 隧道配置整段搬到这里，功能项一个不少 ──
 
 $ grep -cn "收起高级设置\|高级（DSH 隧道 / 端口 / 日志配置）" client.js
-2
+1        # 两个字面量是同一个三元的两臂，只占一行
 
 $ grep -c "密码" client.js        # 全文件「含密码的行数」（④ 与口令门逻辑都在高级区）
 15
 
-$ sed -n '2138,2410p' client.js | grep -c "密码"   # SSH 卡片函数体内（判据要求的区域）
+$ sed -n '2174,2521p' client.js | grep -c "密码"   # SSH 卡片函数体（判据要求的区域）
 0
-
-# SSH 卡片区域内「密码」必须为 0 —— 由 test/order-test.mjs 第 15 块断言守着
-# （取样区间 = function SshHero .. function NatfrpSidebarIcon 的真实函数体）
 ```
+
+> §3 曾用 2138/2410 的旧窗口（捕获时点早于最终布局），评估者复跑发现
+> `function SshHero` 在 2174、窗口 2138-2410 会罩进 hero 外的注释行（计数 2 非 0）。
+> 已按 HEAD 重测：hero 全函数体 2174-2521 内「密码」= 0，实质结论不变。
 
 ## 4) 已闭反常（4 条，结案时随交付交给评估者）
 
