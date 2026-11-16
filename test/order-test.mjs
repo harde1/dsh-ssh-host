@@ -92,7 +92,9 @@ rec('后端接受 patch.port', /patch\.port === undefined/.test(index))
 rec('后端用这个端口建隧道', /local_port: gatePort/.test(index))
 rec('创建成功提示端口已同步', /本机端口也已同步/.test(client))
 rec('节点列表懒加载（展开才拉）', /const openCreate = async \(\) => \{[\s\S]{0,500}?getJSON\('\/nodes'\)/.test(client))
-rec('创建成功后重拉列表与状态', /await Promise\.all\(\[loadExtra\(\), loadState\(\)\]\)/.test(client))
+// 必须带 force：刚 POST 完隧道，若复用「POST 之前就在途」的 /state 快照，
+// 界面会把改动前的数据当改动后显示 —— 这正是这条断言要防的。
+rec('创建成功后重拉列表与状态（强制取新快照）', /await Promise\.all\(\[loadExtra\(\), loadState\(\{ force: true \}\)\]\)/.test(client))
 
 // ── 7) 界面文案不许出现「对齐」「网关」这种内部词 ──
 function uiStrings(src) {

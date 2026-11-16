@@ -50,7 +50,10 @@ rec('悬停提示给出真实总量', /总量 \$\{fmtBytes\(baseTotal\)\}/.test(
 // ── 3) 总量口径：必须用 data_plans，不能用 traffic[1] 当总量 ──
 rec('natfrp.mjs 封装 dataPlans', /dataPlans: \(/.test(api))
 rec('dataPlans 走 /user/data_plans', /'\/user\/data_plans'/.test(api))
-rec('index.js 在 /user 里附带 dataPlans', /dataPlans: plans/.test(idx))
+rec('index.js 在 /user 里附带 dataPlans', /dataPlans: pack\.plans \?\? null/.test(idx))
+// 两个上游调用必须并行：各自最坏 12s（natfrp.mjs:27），串行时远端抽风能让
+// /user 挂满 24s，把宿主同源连接池（HTTP/1.1 仅 6 条）占满一整条更久。
+rec('index.js 的 /user 把 userInfo 与 dataPlans 并行', /Promise\.all\(\[\s*\n\s*api\.userInfo\(\),/.test(idx))
 rec('dataPlans 失败不拖垮账号信息', /dataPlansError/.test(idx))
 rec('客户端优先用流量包真总量', /const hasPlan = planTotal > 0/.test(src))
 rec('无流量包时退化为估算', /hasPlan \? planTotal : todayUsed \+ remaining/.test(src))

@@ -38,7 +38,11 @@ rec('成功时显示体积', /last\?\.bytes/.test(client))
 rec('失败时显示原因', /last\.error \|\| '未知错误'/.test(client))
 
 // ── 3) 进度必须可见 ──
-rec('安装中轮询提到 400ms', /setInterval\(\(\) => void loadState\(\), 400\)/.test(client))
+// 快轮还在，但现在必须带 { fast: true }：闸门默认按 4s 退避，
+// 不带这个标记的话装机进度会被拦成 4s 一跳（进度条假死），所以这条断言
+// 比原来更严 —— 既钉住 400ms，也钉住它绕开了轮询闸门的默认预算。
+rec('安装中轮询提到 400ms', /setInterval\(\(\) => void loadState\(\{ fast: true \}\), 400\)/.test(client))
+rec('快轮把 400ms 作为闸门预算传给 allow()', /gate\.allow\(undefined, opts\?\.fast \? 400 : 0\)/.test(client))
 rec('有 installingNow 触发条件', /const installingNow = Boolean\(st\?\.frpcInstall\?\.progress\)/.test(client))
 rec('进度显示百分比', /正在下载… \$\{pct\}%/.test(client))
 rec('进度显示字节数', /mbText/.test(client))
