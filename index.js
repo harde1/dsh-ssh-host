@@ -415,13 +415,26 @@ export function apply(ctx, config = {}) {
   let lastTunnelInfo = null
   let lastApiError = ''
 
-  function apiOrNull(token) {
+  /**
+   * @param {string} token
+   * @param {number} [timeoutMs] 覆盖上游调用上限
+   *
+   * ⚠️ 面板的**读**路由要传比前端 GET 超时（client.js 的 GET_TIMEOUT_MS = 8s）
+   *    更短的值：前端 8s 放弃、后端还挂着 12s，等于白占一条上游连接，
+   *    而且用户看到的是一句含义模糊的"超时"而不是后端给出的明确失败。
+   *    写路由（建/删隧道）不传，沿用 natfrp.mjs 的 12s —— 那是用户主动等的动作。
+   */
+  function apiOrNull(token, timeoutMs) {
     if (!token) return null
     return createClient(token, {
       version: PLUGIN_VERSION,
+      ...(Number.isFinite(timeoutMs) && timeoutMs > 0 ? { timeoutMs } : {}),
       log: (m) => logWarn(`natfrp: api ${m}`),
     })
   }
+
+  /** 面板轮询的读路由统一用它：6s 内必须有结论，早于前端 8s 放弃。 */
+  const READ_TIMEOUT_MS = 6000
 
   /**
    * 记一次「API 确实通了」，把上一次的失败抹掉。
@@ -961,7 +974,7 @@ export function apply(ctx, config = {}) {
 
     if (path === '/ssh-host/api/tunnels' && req.method === 'GET') {
       const token = await resolveToken()
-      const api = apiOrNull(token)
+      const api = apiOrNull(token, READ_TIMEOUT_MS)
       if (!api) { json(res, 400, { error: 'no-token' }); return true }
       try {
         const [tunnels, nodes] = await Promise.all([api.tunnels(), api.nodes().catch(() => ({}))])
@@ -996,7 +1009,7 @@ export function apply(ctx, config = {}) {
      */
     if (path === '/ssh-host/api/nodes' && req.method === 'GET') {
       const token = await resolveToken()
-      const api = apiOrNull(token)
+      const api = apiOrNull(token, READ_TIMEOUT_MS)
       if (!api) { json(res, 400, { error: 'no-token' }); return true }
       try {
         const [all, stats] = await Promise.all([
@@ -1274,21 +1287,25 @@ export function apply(ctx, config = {}) {
 
     if (path === '/ssh-host/api/user' && req.method === 'GET') {
       const token = await resolveToken()
-      const api = apiOrNull(token)
+      const api = apiOrNull(token, READ_TIMEOUT_MS)
       if (!api) { json(res, 400, { error: 'no-token' }); return true }
       try {
-        const info = await api.userInfo()
-        noteApiOk()
         // 附带流量包：userInfo.traffic 没有「总量」，算剩余百分比必须靠 data_plans。
         // 端点失败不能拖垮整个账号信息，故单独 catch 并在响应里标注。
-        let plans = null
-        let plansError
-        try {
-          plans = await api.dataPlans('valid')
-        } catch (e) {
-          plansError = e instanceof ApiError ? e.message : String(e?.message ?? e)
-        }
-        json(res, 200, { ...info, dataPlans: plans, dataPlansError: plansError })
+        //
+        // ⚠️ 必须并行：两个调用各自最坏 12s（natfrp.mjs:27 的 timeoutMs），
+        //    串行时远端抽风能让这个请求挂满 24s，把桌面宿主同源连接池
+        //    （HTTP/1.1 只有 6 条）占掉一整条更久。并行后最坏回到 12s。
+        const [info, pack] = await Promise.all([
+          api.userInfo(),
+          api.dataPlans('valid')
+            .then((plans) => ({ plans }))
+            .catch((e) => ({
+              plansError: e instanceof ApiError ? e.message : String(e?.message ?? e),
+            })),
+        ])
+        noteApiOk()
+        json(res, 200, { ...info, dataPlans: pack.plans ?? null, dataPlansError: pack.plansError })
       } catch (e) {
         // 失败也记进健康状态：密钥失效时侧边栏该变红，而不是只有面板里报错
         lastApiError = e instanceof ApiError ? e.message : String(e?.message ?? e)
@@ -1594,7 +1611,7 @@ export function apply(ctx, config = {}) {
       if (sshTunnelId) {
         try {
           const token = await resolveToken()
-          const api = apiOrNull(token)
+          const api = apiOrNull(token, READ_TIMEOUT_MS)
           if (api) {
             const [list, nodes] = await Promise.all([
               api.tunnels(),

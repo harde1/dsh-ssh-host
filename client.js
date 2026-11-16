@@ -43,6 +43,141 @@ window.__ModuleLoader__.load({
       return base ? `${base}${API}/logs` : `${API}/logs`
     }
 
+    // ────────────── 请求层：超时 + 在飞去重 ──────────────
+    //
+    // 起因（2026-11-16 排查）：桌面宿主里本插件面板的所有请求都走 fetch 且
+    // **没有超时**。宿主是单浏览器上下文，同源 HTTP/1.1 连接池只有 6 条，
+    // 一次卡住的远端调用（`/user` `/tunnels` 要打 api.natfrp.com，最坏 12s，
+    // 见 natfrp.mjs:27）会把请求挂满整个池子；轮询一环套一环，就可能出现
+    // 「面板一直转、别的会话载入不回来」。超时与去重都是这里的止血。
+    //
+    // ⚠️ 机制未证实，但无超时的 fetch 是我自己代码里的事实，先修自己。
+
+    /** 轮询用的 GET 上限。/state 是本地快照，正常 <1ms；8s 足够宽容。 */
+    const GET_TIMEOUT_MS = 8000
+    /** 写操作用的 POST 上限。装机等长任务已改成「立即返回 + 轮询进度」，不再长挂。 */
+    const POST_TIMEOUT_MS = 20000
+
+    /** AbortSignal.timeout 在老内核缺失时退化为手动 controller，绝不因缺 API 抛错。 */
+    function timeoutSignal(ms) {
+      try {
+        if (typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout === 'function') {
+          return AbortSignal.timeout(ms)
+        }
+      } catch { /* fall through */ }
+      try {
+        const c = new AbortController()
+        setTimeout(() => { try { c.abort() } catch { /* noop */ } }, ms)
+        return c.signal
+      } catch { return undefined }
+    }
+
+    /** 统一的带超时 fetch —— 面板里**任何**一个请求都必须走它。 */
+    function requestWithTimeout(url, init, ms, label) {
+      const signal = timeoutSignal(ms)
+      const opts = signal ? { ...init, signal } : init
+      return fetch(url, opts).catch((e) => rethrowTimeout(e, ms, label || url))
+    }
+
+    /** 把 AbortError 翻成带超时信息的话，界面才能说清「多久没响应」而不是只说失败。 */
+    function rethrowTimeout(e, ms, path) {
+      const name = String(e?.name ?? '')
+      if (name === 'AbortError' || e?.name === 'TimeoutError') {
+        const err = new Error(`请求超时（${Math.round(ms / 1000)}s）：${path}`)
+        err.timedOut = true
+        throw err
+      }
+      throw e
+    }
+
+    /**
+     * 同一个 GET 路径**同时在飞只留一份**，后来者复用同一结果。
+     *
+     * 为什么必须有：侧边栏状态点每 5s 拉 `/state`（见 diagStore 的 tick），
+     * 面板每 4s 拉 `/state`，两者路径完全相同 —— 去重顺带把这条重复消掉。
+     *
+     * ⚠️ 只用于「读快照」。写操作之后复用一个在写之前发出的请求 = 把旧数据
+     *    当新数据，那种 bug 比多打一次请求难查得多。所以规则是：**发任何 POST
+     *    就清空在途表**（见下面的 invalidateSharedGets），谁也不用记得传参。
+     */
+    const pendingGets = new Map()
+
+    function invalidateSharedGets() { pendingGets.clear() }
+
+    async function sharedGet(key, run) {
+      const hit = pendingGets.get(key)
+      if (hit) return hit
+      const p = (async () => {
+        try { return await run() } finally {
+          // 只删"还是我自己"的那条：写操作会清空整表（invalidateSharedGets），
+          // 若这里无条件删，就会把清空之后新发的那条也误删 → 只是少一次去重，
+          // 但把归属写清楚，以后改这里的人不会被绕晕。
+          if (pendingGets.get(key) === p) pendingGets.delete(key)
+        }
+      })()
+      pendingGets.set(key, p)
+      return p
+    }
+
+    /** 页面在不在前台（宿主最小化 / 切走时 true → false）。拿不到就当前台。 */
+    function docVisible() {
+      try { return !(typeof document !== 'undefined' && document.hidden) } catch { return true }
+    }
+
+    /**
+     * 面板在不在屏幕上。宿主把视图留在 DOM 里但藏起来（display:none / 零尺寸）时
+     * 返回 false —— 那种情况下轮询纯属白耗宿主连接。
+     *
+     * ⚠️ 元素**找不到**时必须返回 true：本插件的渲染容器由宿主决定，
+     *    判据不可用就照常轮询（宁多不漏）。漏掉首屏刷新 = 面板永远空白，
+     *    比多打几个请求严重得多。所以只有"明确测到不可见"才拦。
+     */
+    function panelVisible() {
+      if (!docVisible()) return false
+      try {
+        const el = document.querySelector('[data-plugin="sshhost"]')
+        if (!el) return true // 判据不可用 → 保守放行
+        const rect = el.getBoundingClientRect()
+        return rect.width >= 2 && rect.height >= 2
+      } catch { return true }
+    }
+
+    /**
+     * 轮询闸门：每轮定时触发时问一次「这一轮要不要真发请求」。
+     *
+     * 两条各自独立的拦截理由：
+     *   1) **不可见**：面板/页面不在前台就别继续占宿主的同源连接。
+     *      但每 30s 仍放行一次探活 —— 万一宿主把视图挂在隐藏容器里，
+     *      状态也不能永久饿死（回到前台最迟 30s 内自愈）。
+     *   2) **连续失败退避**：远端断了或宿主堵住时，照旧每 4s 灌请求只会更糟。
+     *      间隔按 base → 2× → 4× … 递增，封顶 60s，成功一次立刻复位。
+     *
+     * 首次调用一定放行（last=0），所以挂载时的第一帧刷新不受闸门影响。
+     */
+    function createPollGate(baseMs, visible) {
+      let fails = 0
+      let last = 0
+      return {
+        /**
+         * @param {number} [now] 注入时钟，便于测试
+         * @param {number} [base] 覆盖基础间隔 —— 装机时的 400ms 快轮必须能拿到
+         *   400ms 的预算，否则会被这里默认的 4s 拦掉，进度条退化成 4s 一跳。
+         */
+        allow(now, base) {
+          const t = typeof now === 'number' ? now : Date.now()
+          const need = Math.min((base || baseMs) * Math.pow(2, Math.min(fails, 4)), 60000)
+          if (fails > 0 && t - last < need) return false
+          if (fails === 0 && visible && !visible() && t - last < 30000) return false
+          last = t
+          return true
+        },
+        ok() { fails = 0 },
+        bad() { fails += 1 },
+        /** 测试与调试用：当前退避到第几档 */
+        failures() { return fails },
+      }
+    }
+
     /**
      * 打开外链的统一入口。
      *
@@ -109,20 +244,25 @@ window.__ModuleLoader__.load({
       }, children)
     }
 
-    async function getJSON(path) {
-      const r = await fetch(`${API}${path}`, { credentials: 'same-origin' })
-      const body = await r.json().catch(() => ({}))
-      if (!r.ok) {
-        // 把结构化字段附在错误上，调用方才能给出具体提示
-        // （例如节流的 retryAfter：光说"太频繁"用户不知道该等多久）
-        const err = new Error(body.message || body.error || `HTTP ${r.status}`)
-        err.code = body.error
-        err.retryAfter = body.retryAfter
-        err.throttled = body.throttled === true
-        err.status = r.status
-        throw err
-      }
-      return body
+    async function getJSON(path, opts) {
+      const fresh = Boolean(opts?.fresh)
+      const doIt = () => requestWithTimeout(`${API}${path}`, { credentials: 'same-origin' }, GET_TIMEOUT_MS, path)
+        .then(async (r) => {
+          const body = await r.json().catch(() => ({}))
+          if (!r.ok) {
+            // 把结构化字段附在错误上，调用方才能给出具体提示
+            // （例如节流的 retryAfter：光说"太频繁"用户不知道该等多久）
+            const err = new Error(body.message || body.error || `HTTP ${r.status}`)
+            err.code = body.error
+            err.retryAfter = body.retryAfter
+            err.throttled = body.throttled === true
+            err.status = r.status
+            throw err
+          }
+          return body
+        })
+      // fresh：绕开在飞去重，保证拿到「动作之后」的数据
+      return fresh ? doIt() : sharedGet(path, doIt)
     }
     async function post(path, body) {
       const init = { method: 'POST', credentials: 'same-origin' }
@@ -130,17 +270,23 @@ window.__ModuleLoader__.load({
         init.headers = { 'content-type': 'application/json' }
         init.body = JSON.stringify(body)
       }
-      const r = await fetch(`${API}${path}`, init)
+      // 写之前、写之后再各清一次在途 GET：写操作落地期间可能恰好有轮询发了
+      // 一个「旧状态」的请求，不复用它，否则界面会把改动前的数据当成改动后。
+      invalidateSharedGets()
+      const r = await requestWithTimeout(`${API}${path}`, init, POST_TIMEOUT_MS, path)
+      invalidateSharedGets()
       const payload = await r.json().catch(() => ({}))
       if (!r.ok) throw new Error(payload.message || payload.error || `HTTP ${r.status}`)
       return payload
     }
     async function postConfig(patch) {
-      const r = await fetch(`${API}/config`, {
+      invalidateSharedGets()
+      const r = await requestWithTimeout(`${API}/config`, {
         method: 'POST', credentials: 'same-origin',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify(patch),
-      })
+      }, POST_TIMEOUT_MS, '/config')
+      invalidateSharedGets()
       const body = await r.json().catch(() => ({}))
       if (!r.ok) {
         // 把 hint 附在错误上，让界面能显示「怎么解决」而不只是「失败了」
@@ -370,12 +516,26 @@ window.__ModuleLoader__.load({
         }
       }
 
-      async function tick() {
+      /**
+       * 侧边栏状态点的轮询闸门。
+       * ⚠️ 判据用 docVisible() 而**不是** panelVisible()：状态点常驻侧边栏，
+       *    面板没打开时它照样得工作。
+       */
+      const sidebarGate = createPollGate(5000, docVisible)
+
+      async function tick(opts) {
+        if (!opts?.force && !sidebarGate.allow()) return
         try {
           const st = await getJSON('/state')
+          sidebarGate.ok()
           publishEnabled(st?.enabled !== false)
           publish(diagOf(st))
-        } catch {
+        } catch (e) {
+          sidebarGate.bad()
+          // 超时**不**标红：超时只表示"这一轮没答案"，而红点表示"主机有问题"。
+          // 把前者当后者会在宿主繁忙时误报故障，用户看到的是无端的红灯。
+          // 连接被拒 / HTTP 5xx 才是真故障，照旧红。
+          if (e?.timedOut) return
           publish('red')
         }
         // 兜底自愈：React 重渲染可能冲掉注入的开关节点，每轮轮询补挂一次。
@@ -426,7 +586,8 @@ window.__ModuleLoader__.load({
             }
           }
         },
-        kick: () => void tick(),
+        // 主动踢一次（面板存完配置/开关后调用）：绕开闸门，状态点要立刻跟上
+        kick: () => void tick({ force: true }),
         /** 供外部（面板开关）主动推送，避免等 5s 轮询 */
         setEnabled: (v) => { publishEnabled(v); },
       }
@@ -964,9 +1125,20 @@ window.__ModuleLoader__.load({
       /** 是否还「钉」在底部 —— 用户往上翻看旧日志时解除，滚回底部自动恢复 */
       const logPinned = useRef(true)
 
-      const loadState = useCallback(async () => {
+      /**
+       * /state 的轮询闸门。装机的 400ms 快轮共用同一个闸门：
+       * 失败退避对两者都成立，快轮只是把 base 换小。
+       */
+      const stateGate = useRef(null)
+      if (!stateGate.current) stateGate.current = createPollGate(4000, panelVisible)
+
+      const loadState = useCallback(async (opts) => {
+        const gate = stateGate.current
+        // 定时器触发的那一轮先问闸门；用户点出来的刷新（force）一律放行
+        if (!opts?.force && !gate.allow(undefined, opts?.fast ? 400 : 0)) return
         try {
-          const s = await getJSON('/state')
+          const s = await getJSON('/state', opts?.force ? { fresh: true } : undefined)
+          gate.ok()
           if (!mounted.current) return
           setSt(s)
           if (!portDirty.current) setGatePort(String(s.gatePort ?? ''))
@@ -985,13 +1157,16 @@ window.__ModuleLoader__.load({
           setPollErr('')
           diagStore.kick() // 面板拿到最新状态后立刻同步侧边栏状态点
         } catch (e) {
+          gate.bad() // 连续失败 → 下一轮间隔翻倍，别在故障期继续灌请求
           if (mounted.current) setPollErr(String(e.message || e))
         }
       }, [])
 
       useEffect(() => {
         mounted.current = true
-        void loadState()
+        // 首帧强制放行：面板刚挂载时布局可能还没量出尺寸，闸门此时判"不可见"
+        // 会让用户盯着 30s 空白 —— 那比多打一个请求严重。
+        void loadState({ force: true })
         const t = setInterval(() => void loadState(), 4000)
         return () => { mounted.current = false; clearInterval(t) }
       }, [loadState])
@@ -1000,7 +1175,7 @@ window.__ModuleLoader__.load({
       const installingNow = Boolean(st?.frpcInstall?.progress)
       useEffect(() => {
         if (!installingNow) return undefined
-        const fast = setInterval(() => void loadState(), 400)
+        const fast = setInterval(() => void loadState({ fast: true }), 400)
         return () => clearInterval(fast)
       }, [installingNow, loadState])
 
@@ -1241,10 +1416,14 @@ window.__ModuleLoader__.load({
       /** 拉一次日志。失败静默 —— 日志是辅助信息，不该盖住主界面的报错。 */
       const pullLogs = async () => {
         try {
-          const r = await fetch(`${API}/logs`, { credentials: 'same-origin' })
-          if (!r.ok) return
-          const t = await r.text()
-          if (mounted.current) setLogs(t)
+          // 同样要有超时 + 在飞去重：它是 2s 一次的纯文本请求，不能塞进 getJSON
+          // （那边强制 json() 解析），但也不能成为第 5 个裸 fetch。
+          const t = await sharedGet('/logs', async () => {
+            const r = await requestWithTimeout(`${API}/logs`, { credentials: 'same-origin' }, GET_TIMEOUT_MS, '/logs')
+            if (!r.ok) return null
+            return r.text()
+          })
+          if (t !== null && mounted.current) setLogs(t)
         } catch { /* 拉不到就维持上一份 */ }
       }
 
@@ -1362,7 +1541,7 @@ window.__ModuleLoader__.load({
             flash(setAlignMsg, `已新建隧道「${r.name}」，并设为当前隧道`, 6000)
           }
           // 新隧道已在服务端设成当前隧道 → 列表和状态都要重拉
-          await Promise.all([loadExtra(), loadState()])
+          await Promise.all([loadExtra(), loadState({ force: true })])
         } catch (e) {
           if (mounted.current) setCreateErr(String(e.message || e))
         } finally {
@@ -1449,7 +1628,7 @@ window.__ModuleLoader__.load({
         h(SshHero),
 
         // ── frpc 缺失时的安装引导（置顶，最显眼）──
-        h(FrpcInstallCard, { inst: st.frpcInstall, onDone: () => void loadState() }),
+        h(FrpcInstallCard, { inst: st.frpcInstall, onDone: () => void loadState({ force: true }) }),
 
         // ── 高级（默认收起）：遗留的 DSH 隧道配置整段搬到这里，功能项一个不少 ──
         h('div', {},
@@ -1467,7 +1646,7 @@ window.__ModuleLoader__.load({
       ? h('div', { style: { display: 'flex', flexDirection: 'column', gap: '9px', marginTop: '9px' } },
 
         // ── frpc 版本 + 手动检查更新（未安装/异常时自动隐藏）──
-        h(FrpcVersionBar, { inst: st.frpcInstall, onDone: () => void loadState() }),
+        h(FrpcVersionBar, { inst: st.frpcInstall, onDone: () => void loadState({ force: true }) }),
 
         // ── 总开关 + 运行状态（原来三行标题，现在并成一行）──
         h('div', { style: S.row },
@@ -2144,16 +2323,26 @@ body[data-sshhost-mode="narrow"] button[aria-label="SSH 主机"] > .sshhost-swit
       const tunnelAutoTried = useRef(false)
       const [tunnelAutoErr, setTunnelAutoErr] = useState('')
 
-      const load = useCallback(async () => {
+      /** SSH 卡片的轮询闸门：判据用 panelVisible（SshHero 就渲染在主面板里）。 */
+      const heroGate = useRef(null)
+      if (!heroGate.current) heroGate.current = createPollGate(8000, panelVisible)
+
+      const load = useCallback(async (opts) => {
+        // 8s 轮询走闸门（不可见就歇、连续失败退避）；动作后的刷新 force 绕开。
+        if (!opts?.force && !heroGate.current.allow()) return
         try {
-          const s = await getJSON('/ssh/state')
+          const s = await getJSON('/ssh/state', opts?.force ? { fresh: true } : undefined)
+          heroGate.current.ok()
           if (mounted.current) setSsh(s)
-        } catch { /* 拉不到就保持上一份快照,不闪错误条 */ }
+        } catch {
+          heroGate.current.bad() // 超时/失败翻倍退避，别在故障期灌请求
+          /* 拉不到就保持上一份快照,不闪错误条 */
+        }
       }, [])
 
       useEffect(() => {
         mounted.current = true
-        void load()
+        void load({ force: true })
         const t = setInterval(() => void load(), 8000)
         return () => { mounted.current = false; clearInterval(t) }
       }, [load])
@@ -2221,7 +2410,7 @@ body[data-sshhost-mode="narrow"] button[aria-label="SSH 主机"] > .sshhost-swit
         try {
           const r = await post('/ssh/key/create')
           setMsg(KEY_MSG[r.action] ?? `✓ 密钥已就绪(${r.action ?? '未知结果'})`)
-          void load()   // 立即刷新密钥摘要/四态，不等 8s 轮询
+          void load({ force: true })   // 立即刷新密钥摘要/四态，不等 8s 轮询
         } catch (e) {
           setMsg(`密钥生成失败:${e.message}。可以再点一次「生成 SSH 密钥」。`)
         } finally {
@@ -2245,7 +2434,7 @@ body[data-sshhost-mode="narrow"] button[aria-label="SSH 主机"] > .sshhost-swit
         try {
           const r = await post('/ssh/tunnel/create', {})
           setMsg(r.warning ? `⚠ ${r.warning}` : '✓ SSH 隧道已创建,通道已自动开启,等 frpc 连上即可')
-          void load()   // 立即刷新隧道摘要，不等 8s 轮询
+          void load({ force: true })   // 立即刷新隧道摘要，不等 8s 轮询
         } catch (e) {
           setTunnelAutoErr(String(e.message || e))
           setMsg('')
@@ -2262,7 +2451,7 @@ body[data-sshhost-mode="narrow"] button[aria-label="SSH 主机"] > .sshhost-swit
         try {
           await post('/ssh/tunnel/remove')
           setMsg('✓ SSH 隧道已删除')
-          void load()   // 立即回到「未建隧道」态,不等 8s 轮询
+          void load({ force: true })   // 立即回到「未建隧道」态,不等 8s 轮询
         } catch (e) { setMsg(`删除失败:${e.message}`) }
         finally { setBusy('') }
       }
@@ -2325,7 +2514,7 @@ body[data-sshhost-mode="narrow"] button[aria-label="SSH 主机"] > .sshhost-swit
           await post('/config', { token: v })
           setTokenDraft('')
           setMsg('✓ 访问密钥已保存,正在自动建隧道')
-          void load()
+          void load({ force: true })
         } catch (e) { setMsg(`保存失败:${e.message}`) }
         finally { setBusy('') }
       }
@@ -2448,7 +2637,7 @@ body[data-sshhost-mode="narrow"] button[aria-label="SSH 主机"] > .sshhost-swit
               setBusy('switch'); setMsg('')
               try {
                 await post(v ? '/start' : '/stop')
-                void load()
+                void load({ force: true })
                 diagStore.setEnabled(v); diagStore.kick()
               } catch (e) { setMsg(`切换失败:${e.message}`) }
               finally { setBusy('') }
