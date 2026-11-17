@@ -21,7 +21,7 @@ Host 围栏反代、DSH 二次认证等上游能力原样可用(相关说明见�
 > macOS。请自行审阅源码后再使用;涉及安全敏感场景时请格外谨慎。
 > 代码按 MIT「按原样(AS IS)」提供,不附带任何担保,风险自负。
 >
-> 与「AI 生成即不可靠」无关的部分:**测试是可复核的**。`npm test` 是 27 个套件、995 项
+> 与「AI 生成即不可靠」无关的部分:**测试是可复核的**。`npm test` 是 27 个套件、996 项
 > 全离线的断言(不连 SakuraFrp、不需要访问密钥、不写任何用户目录),其中
 > `admin-auth-test.mjs` 专门覆盖网关鉴权(7 种路径花招、WS 同权、改密后旧 cookie 失效),
 > `ssh-host-test.mjs` 覆盖 SSH 主机能力与路由(135 项,含用系统 `ssh-keygen` 反推公钥来
@@ -97,8 +97,11 @@ SSH 中心卡按「还缺什么」只显示当前那一步,你不需要往下找
 - **打开 = 这条路让给 DSH Go**:插件自己起一个只绑 `127.0.0.1` 的 SSH 前端,并把那条隧道的
   `local_port` 指过去。此时在 DSH Go 的「SSH 主机 → 启动命令」里填 **`dsh desktop`**,
   它就能连上**正在运行的桌面版**:前端用插件那把 ed25519 公钥认证,把会话里的 `dsh` 换成一个
-  只拦 `desktop` 的垫片,由它打印桌面版的启动行(`dsh web: http://127.0.0.1:<端口>/?token=…`,
-  真 token 经环境变量传、不落盘),再用 `direct-tcpip` 把 `127.0.0.1:<DSH 端口>` 转发给手机。
+  只拦 `desktop` 的垫片,由它打印一行 `dsh web: http://127.0.0.1:<外壳端口>/?token=<票>`
+  (token 经环境变量传、不落盘),再用 `direct-tcpip` 只转发到那个外壳端口。
+  外壳不是密码门:它把票换成桌面版**真正的** launch token 后原样转给桌面版,让桌面版自己的
+  303 与 `set-cookie: dsh-auth-…` 流回手机 —— `dsh-auth` 只能由桌面版签,外壳替它回重定向
+  会让 DSH Go 直接报 `login redirect carried no dsh-auth cookie`。真 token 不出插件进程。
 
 为什么要这样绕:DSH 的 `desktop` profile 由 Electron 独占,`dsh --profile desktop` 会被 CLI
 直接拒掉,所以 `dsh desktop` 原本根本没有实现;而插件不在 SSH 明文路径上(隧道直通 22),
@@ -340,7 +343,7 @@ time curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:<端口>/ssh-host
 也是拿一个临时 `DSH_HOME` 跑冷启动)。
 
 ```bash
-npm test                 # 27 个套件、995 项,串行跑并汇总
+npm test                 # 27 个套件、996 项,串行跑并汇总
 # npm test 会核对 README 的套件表与总数：文档数字一过期,测试直接红
 npm test -- path         # 只跑名字含关键字的套件
 ```
@@ -354,7 +357,7 @@ npm test -- path         # 只跑名字含关键字的套件
 
 | 套件 | 项 | 覆盖 |
 |---|---|---|
-| `ssh-front-test.mjs` | 21 | 「对接 DSH Go」的 SSH 前端(**本机 loopback 起真 ssh2 握手**)：公钥逐字节授权 / 错误密钥被拒 / `dsh desktop` 经 PATH 垫片打印启动行并保活 / 交互 shell 明确拒绝 / direct-tcpip 只放行 DSH 端口 |
+| `ssh-front-test.mjs` | 25 | 「对接 DSH Go」的 SSH 前端(**本机 loopback 起真 ssh2 握手**)：公钥逐字节授权 / 错误密钥被拒 / `dsh desktop` 经 PATH 垫片打印启动行并保活 / 交互 shell 明确拒绝 / direct-tcpip 只放行 DSH 端口 |
 | `ssh-host-test.mjs` | 142 | SSH 主机能力:ed25519 密钥(**用系统 `ssh-keygen -y` 反推公钥来判封装是否合法**)/ authorized_keys upsert / 连接命令 / sshd 探测注入点 / SSH 路由 / 旧 PKCS8 私钥自愈 / 节点三级回退 / 建隧道自动开启通道 / frpc 多隧道(NATFRP_TARGET) |
 | `order-test.mjs` | 125 | 解锁顺序、表单排布、按钮文案与出现条件、SSH 中心卡契约(复制回退 / 深链分支 / 区内不出现口令字样 / **自动生成密钥与自动建隧道的触发条件、只试一次与「重试」出口**)、「高级」区折叠边界(遗留项确实在区内、日志与安装引导确实在区外) |
 | `paths-test.mjs` | 51 | frpc / DSH home 路径解析(含 `$DSH_HOME` 空白、`PROFILE_DIR` 反推) |
@@ -376,7 +379,7 @@ npm test -- path         # 只跑名字含关键字的套件
 | `defaults-test.mjs` | 19 | 配置默认值 |
 | `update-check-test.mjs` | 15 | 手动检查更新(结论 / 60s 节流 / 连点拦截 / hooks 规则) |
 | `scroll-test.mjs` | 14 | 主面板滚动容器链 |
-| `gate-redirect-test.mjs` | 15 | 网关 token 补发与重定向循环(补一次即停 / 存不住 cookie 时给说明页 / 自愈仅一次) |
+| `gate-redirect-test.mjs` | 12 | 网关 token 补发与重定向循环(补一次即停 / 存不住 cookie 时给说明页 / 自愈仅一次) |
 | `switch-test.mjs` | 11 | 侧边栏开关状态机(乐观更新 / 连点保护) |
 | `density-test.mjs` | 11 | 面板信息密度与读屏高度 |
 | `fresh-install-test.mjs` | 10 | 全新安装的冷启动形态 |

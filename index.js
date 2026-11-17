@@ -22,7 +22,7 @@ import { createPasswordGate, createGateServer } from './gate.mjs'
 import { installFrpc, checkInstalled, fetchClients, pickAsset, extractSakuraVersion, compareFrpcVersion } from './installer.mjs'
 import { resolveDshHome, resolveFrpcPath, displayPath } from './paths.mjs'
 import { checkSshd, countSshSessions, generateHostKey, fingerprintOf as sshFingerprintOf, installPublicKey, buildConnectCommand, SSHD_PORT, toOpenSshPrivatePem, publicKeyFromPrivatePem } from './ssh.mjs'
-import { buildAttachLine, buildShimScript, startSshFront } from './ssh-front.mjs'
+import { buildAttachLine, buildShimScript, rewriteAttachRequest, startSshFront } from './ssh-front.mjs'
 
 export const name = 'sshhost'
 export const inject = ['credentials', 'webServer', 'timer', 'connection']
@@ -552,29 +552,37 @@ export function apply(ctx, config = {}) {
     const port = dshPortNow()
     if (!port || !launchTokenNow()) return null
     attachTicket = randomUUID().replace(/-/g, '')
-    const door = createPasswordGate({
-      getPassword: () => attachTicket,
-      // 像 dsh web 一样认 `?token=<票>`（DSH Go 只会用这种启动链接换 cookie）
-      acceptTokenParam: true,
-      log: (m) => logInfo(`natfrp: DSH Go 外壳 ${m}`),
-    })
     const server = createGateServer({
       port: 0,
       host: '127.0.0.1',
       upstream: { host: '127.0.0.1', port: dshPortNow },
-      launchToken: launchTokenNow,
+      // 注入由下面按票据显式做（换掉 token），这里关掉网关自己的补 token 逻辑
+      launchToken: () => '',
       onRequest: async (req, res, opts = {}) => {
-        if (opts.upgrade) {
-          if (!door.checkWs(req)) {
+        /**
+         * ⚠️ 外壳**不许**替桌面版回重定向：真机 `DshProtocolException: login redirect carried
+         * no dsh-auth cookie` 就是网关密码门那种「自己 302 + 自己的 cookie」造成的 ——
+         * dsh-auth 只能由桌面版签。这里只判定票据、把 token 换成真 token，然后原样转发，
+         * 让桌面版的 303 与 set-cookie 流回手机。
+         */
+        const verdict = rewriteAttachRequest(
+          { url: req.url, cookie: req.headers.cookie },
+          { ticket: attachTicket, launchToken: launchTokenNow() },
+        )
+        if (verdict.action === 'deny') {
+          if (opts.upgrade) {
             try {
               res.write('HTTP/1.1 401 Unauthorized\r\nConnection: close\r\nContent-Length: 0\r\n\r\n')
               res.destroy()
             } catch { /* noop */ }
             return true
           }
-          return false
+          res.writeHead(401, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' })
+          res.end(`dsh-ssh-host: attach denied (${verdict.reason ?? 'no-session'})`)
+          return true
         }
-        return door.handle(req, res)
+        req.url = verdict.url
+        return false
       },
       log: (m) => logInfo(`natfrp: DSH Go 外壳 ${m}`),
     })

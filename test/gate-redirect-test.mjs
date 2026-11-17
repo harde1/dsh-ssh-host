@@ -237,43 +237,6 @@ const FAKE_HOST = 'www.tunnel.nyat.app:12345'
   up.server.close()
 }
 
-// ================= C) 「对接 DSH Go」外壳 =================
-//
-// 外壳必须长得像 `dsh web`：DSH Go 只会用 `/?token=<票>` 这种启动链接换 cookie。
-// 放行之后，上游拿到的必须是**真 launch token**（由网关注入），票据不外泄。
-
-{
-  const up = await fakeUpstream('ok')
-  const TICKET = 'shell-ticket-abc'
-  const gate = createPasswordGate({ getPassword: () => TICKET, acceptTokenParam: true })
-  const proxy = createGateServer({
-    port: 0,
-    upstream: { host: '127.0.0.1', port: up.port },
-    launchToken: () => LAUNCH,
-    acceptTokenParam: true,
-    onRequest: async (req, res) => gate.handle(req, res),
-  })
-  await proxy.listen()
-  const port = proxy.server.address().port
-
-  const hit = await http(port, { path: `/?token=${TICKET}`, headers: { host: FAKE_HOST, accept: 'text/html' } })
-  const cookie = pick(hit, 'sshhost_gate')
-  record('外壳: GET /?token=<票> → 302 且种密码门 cookie（dsh web 首访形态）',
-    hit.status === 302 && Boolean(cookie), `status=${hit.status} cookie=${Boolean(cookie)}`)
-
-  const bad = await http(port, { path: '/?token=wrong-ticket', headers: { host: FAKE_HOST, accept: 'text/html' } })
-  record('外壳: 错票不放行（不种 cookie）',
-    !pick(bad, 'sshhost_gate') && bad.status === 200, `status=${bad.status}`)
-
-  const after = await http(port, { path: '/', headers: { host: FAKE_HOST, accept: 'text/html', cookie } })
-  const seen = String(after.headers['x-seen-url'] ?? '')
-  record('外壳: 上游拿到的是真 launch token（票据不外泄）',
-    seen.includes(`token=${LAUNCH}`) && !seen.includes(TICKET), `seen=${seen}`)
-
-  await proxy.close()
-  up.server.close()
-}
-
 const failed = results.filter((r) => !r.pass)
 console.log(`\n${results.length - failed.length}/${results.length} passed`)
 if (failed.length) {

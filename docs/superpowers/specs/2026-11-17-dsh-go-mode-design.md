@@ -27,6 +27,20 @@ DSH Go ──SSH 隧道──▶ 插件 SSH 前端（127.0.0.1:<前端端口>）
                                             └──▶ 桌面版 WebServer :58920
 ```
 
+### 握手契约（照抄 DSH Go 的实现，别自己发明）
+
+DSH Go 的 `DshClient.login()`（dsh-go `packages/dsh_client/lib/src/connection.dart:312-336`）是：
+
+1. `GET /?token=<launch token>`，**不跟随重定向**；
+2. 401 → 直接报「launch token rejected」；
+3. 必须是 **302/303**，且响应里有名为 `dsh-auth-…` 的 `set-cookie`，否则报
+   `DshProtocolException: login redirect carried no dsh-auth cookie`；
+4. 之后用该 cookie `GET /`（同样不跟随重定向），期望 200。
+
+所以外壳**只能**把票换成真 token 转发、把桌面版的 303 与 `set-cookie` 原样送回；
+一旦外壳自己回 302/303（密码门那套就是这么干的），客户端拿不到 dsh-auth 就判死。
+真机第二次报错正是这个原因，已按此改。
+
 ### 「dsh web 外壳」而不是直接把钥匙递出去
 
 外壳就是一个 `createGateServer` 实例：DSH Go 拿 `/?token=<票>` 来换 cookie（这正是 `dsh web`

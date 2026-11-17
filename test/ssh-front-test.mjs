@@ -14,7 +14,7 @@ import { createServer } from 'node:net'
 import { generateHostKey } from '../ssh.mjs'
 import {
   parseEd25519PublicKeyLine, rawEd25519FromKeyData, sameEd25519Key,
-  buildAttachLine, wantsDesktop, buildShimScript, withShimPath, startSshFront,
+  buildAttachLine, wantsDesktop, buildShimScript, withShimPath, rewriteAttachRequest, startSshFront,
 } from '../ssh-front.mjs'
 
 const results = []
@@ -77,6 +77,22 @@ const skip = (n, why) => { results.push(true); console.log(`SKIP  ${n} — ${why
     withShimPath('dsh desktop --host 127.0.0.1', '/shim/dir')
       === 'PATH="/shim/dir:$PATH"; export PATH; dsh desktop --host 127.0.0.1'
     && withShimPath("sh -lc 'x'", '/it"s').includes('PATH="/it\\"s:$PATH"'))
+
+  // 真机回归（2026-11-17，第二次）：DSH Go 报 `login redirect carried no dsh-auth cookie`。
+  // dsh-auth 只能由桌面版自己签 -> 外壳不能替它回重定向，只能把票换成真 token 后原样转发。
+  {
+    const opt = { ticket: 'TICKET', launchToken: 'REAL' }
+    const hit = rewriteAttachRequest({ url: '/?token=TICKET' }, opt)
+    rec('外壳判定：票据对 → 换成真 launch token 后放行（让桌面版的 303 流回去）',
+      hit.action === 'proxy' && hit.url === '/?token=REAL', JSON.stringify(hit))
+    rec('外壳判定：票据错 → 拒绝（不渲染登录页，那不是 dsh web 的形态）',
+      rewriteAttachRequest({ url: '/?token=nope' }, opt).action === 'deny'
+      && rewriteAttachRequest({ url: '/?token=nope' }, opt).reason === 'bad-ticket')
+    rec('外壳判定：已带 dsh-auth 会话 cookie 的后续请求直接转发',
+      rewriteAttachRequest({ url: '/api/x', cookie: 'a=1; dsh-auth-ABC=1' }, opt).action === 'proxy')
+    rec('外壳判定：既没票也没会话 → 拒绝',
+      rewriteAttachRequest({ url: '/', cookie: 'mine=1' }, opt).action === 'deny')
+  }
 
   const shim = buildShimScript('/usr/local/bin/dsh')
   rec('buildShimScript：命中 desktop 时打印启动行后退出（不保活，避免拿旧端口重连），其余原样 exec 真 dsh',

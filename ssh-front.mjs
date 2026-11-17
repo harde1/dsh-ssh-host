@@ -102,6 +102,40 @@ export function withShimPath(command, shimDir) {
   return `${prefix} ${s}`
 }
 
+/**
+ * 「dsh web 外壳」的请求判定（纯函数，路由与测试共用）。
+ *
+ * 为什么不能自己做密码门：真机报 `DshProtocolException: login redirect carried no dsh-auth
+ * cookie`。DSH Go 的握手是「拿 `/?token=<票>` 换 303 + `set-cookie: dsh-auth-…`」，而这个
+ * cookie **只能由桌面版自己签**。我们若替它回 302/303（网关那套密码门就是如此），客户端拿不到
+ * dsh-auth 就会直接判定握手失败。
+ *
+ * 所以外壳只做两件事：
+ *   1. 票据正确 → 把 URL 里的 `token` 换成**真 launch token**，原样转给桌面版，让 303 与
+ *      set-cookie 原样流回手机；
+ *   2. 已经带着 `dsh-auth-*` 会话 cookie 的后续请求 → 直接转发（cookie 归属由桌面版自己校验）。
+ * 票据错、且没有 dsh-auth 的请求一律 401 —— 不渲染登录页（那不是 dsh web 的形态）。
+ */
+export const DSH_AUTH_COOKIE_RE = /(?:^|;\s*)dsh-auth(?:-[A-Za-z0-9_-]+)?=/
+
+export function rewriteAttachRequest({ url, cookie = '' } = {}, { ticket = '', launchToken = '' } = {}) {
+  let u
+  try {
+    u = new URL(String(url ?? '/'), 'http://127.0.0.1')
+  } catch {
+    return { action: 'deny', reason: 'bad-url' }
+  }
+  const given = u.searchParams.get('token')
+  if (given != null) {
+    if (!ticket || given !== ticket) return { action: 'deny', reason: 'bad-ticket' }
+    if (!launchToken) return { action: 'deny', reason: 'no-launch-token' }
+    u.searchParams.set('token', launchToken)
+    return { action: 'proxy', url: `${u.pathname}${u.search}` }
+  }
+  if (DSH_AUTH_COOKIE_RE.test(String(cookie ?? ''))) return { action: 'proxy', url: `${u.pathname}${u.search}` }
+  return { action: 'deny', reason: 'no-session' }
+}
+
 /** 垫片内容：只拦 `desktop`，其余原样 exec 真 dsh；命中时打印启动行并保活。 */
 export function buildShimScript(realDshPath) {
   const real = String(realDshPath ?? 'dsh').replace(/'/g, `'\\''`)
