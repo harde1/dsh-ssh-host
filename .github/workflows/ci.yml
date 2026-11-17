@@ -53,7 +53,10 @@ jobs:
           node -v
           npm -v
 
-      # 本项目零运行时依赖、零开发依赖，不需要 npm ci / npm install。
-      # 直接跑测试即可。
+      # 「对接 DSH Go」的 SSH 前端依赖 ssh2（唯一运行时依赖，纯 JS，无需编译）。
+      # 测试仍然全部离线（只连本机 loopback），但依赖必须先装好。
+      - name: 安装运行时依赖
+        run: npm install --omit=dev --no-audit --no-fund
+
       - name: 跑全部离线测试
         run: npm test

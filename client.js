@@ -2666,6 +2666,58 @@ body[data-sshhost-mode="narrow"] button[aria-label="SSH 主机"] > .sshhost-swit
             ? h('span', { style: S.code, title: '手机端导入私钥后可比对这串指纹' }, ssh.key.fingerprint)
             : null),
 
+        // 对接 DSH Go：模式开关。开 = 插件自己当 SSH 前端并把这条隧道的 local_port 指过来，
+        // 于是 DSH Go「启动命令」里那句 `dsh desktop` 才落到插件（DSH 的 desktop profile 由
+        // Electron 独占，CLI 起不来，插件替它把启动行交给 DSH Go）。关 = 隧道回到 22，
+        // 系统 sshd 直连 —— 那是纯粹的 SSH 主机。
+        // ⚠️ 绿点只认「真收到过 desktop 启动请求」（dshGo.attachCount），不是「开关打开了」：
+        //    开关只是把路铺好，连没连上得看对面有没有真的敲门。
+        (() => {
+          const dg = ssh.dshGo ?? {}
+          const on = dg.enabled === true
+          const attached = Number(dg.attachCount) || 0
+          const tone = !channelOn
+            ? '通道没开，先打开上面的通道'
+            : !on
+              ? '关闭 · 纯 SSH 主机（Termius 用这条隧道）'
+              : !dg.running
+                ? '开关已开，但前端没起来（缺 SSH 密钥或 DSH 启动 token，看下方提示）'
+                : attached > 0
+                  ? `DSH Go 已对接（收到 ${attached} 次 desktop 启动请求）`
+                  : '等待 DSH Go 连接（隧道已指向插件前端）'
+          return h('div', {
+            style: {
+              display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap',
+              margin: '2px 0 4px', padding: '8px 10px', borderRadius: '8px',
+              background: 'rgba(127,127,127,.06)',
+            },
+          },
+          h('span', { style: { ...S.label, fontSize: '12px' } }, '对接 DSH Go'),
+          h(Toggle, {
+            on,
+            disabled: busy === 'dshgo' || !channelOn,
+            onChange: async (v) => {
+              setBusy('dshgo'); setMsg('')
+              try {
+                await post('/ssh/dsh-go', { enabled: v })
+                void load({ force: true })
+              } catch (e) { setMsg(`切换失败:${e.message}`) }
+              finally { setBusy('') }
+            },
+          }),
+          h('span', {
+            style: {
+              fontSize: '12px', lineHeight: 1.6,
+              color: on && dg.running && attached > 0 ? '#16a34a' : 'inherit',
+              opacity: channelOn ? 1 : 0.65,
+            },
+          }, `${on && dg.running && attached > 0 ? '● ' : ''}${tone}`),
+          on
+            ? h('span', { style: { fontSize: '11px', opacity: 0.7 } },
+              '开启期间 Termius 连这条隧道会被拒（交互终端请关掉本开关）')
+            : null)
+        })(),
+
         stepMain,
 
         // 失败提示一律红,警告(⚠)也红,成功提示绿 —— 判断文案内容而不是另开一个 state

@@ -21,7 +21,7 @@ Host 围栏反代、DSH 二次认证等上游能力原样可用(相关说明见�
 > macOS。请自行审阅源码后再使用;涉及安全敏感场景时请格外谨慎。
 > 代码按 MIT「按原样(AS IS)」提供,不附带任何担保,风险自负。
 >
-> 与「AI 生成即不可靠」无关的部分:**测试是可复核的**。`npm test` 是 26 个套件、964 项
+> 与「AI 生成即不可靠」无关的部分:**测试是可复核的**。`npm test` 是 27 个套件、990 项
 > 全离线的断言(不连 SakuraFrp、不需要访问密钥、不写任何用户目录),其中
 > `admin-auth-test.mjs` 专门覆盖网关鉴权(7 种路径花招、WS 同权、改密后旧 cookie 失效),
 > `ssh-host-test.mjs` 覆盖 SSH 主机能力与路由(135 项,含用系统 `ssh-keygen` 反推公钥来
@@ -88,6 +88,27 @@ SSH 中心卡按「还缺什么」只显示当前那一步,你不需要往下找
 所以只能回答「现在有没有客户端连着」——**分不出是 Termius 还是 DSH Go**,
 更看不到会话里跑了什么命令(插件不在 SSH 明文路径上,隧道是 `local_port=22` 直通 sshd)。
 `netstat` 采样失败会降级成「未观测」而不是报红:看不见不等于 SSH 坏了。
+
+### 对接 DSH Go(可选,开关控制)
+
+卡上还有第二个开关 **「对接 DSH Go」**。它是**模式开关**,不是叠加:
+
+- **关闭(默认)= 纯粹的 SSH 主机**:SSH 隧道 `local_port=22` 直连系统 sshd,Termius 一切照旧。
+- **打开 = 这条路让给 DSH Go**:插件自己起一个只绑 `127.0.0.1` 的 SSH 前端,并把那条隧道的
+  `local_port` 指过去。此时在 DSH Go 的「SSH 主机 → 启动命令」里填 **`dsh desktop`**,
+  它就能连上**正在运行的桌面版**:前端用插件那把 ed25519 公钥认证,把会话里的 `dsh` 换成一个
+  只拦 `desktop` 的垫片,由它打印桌面版的启动行(`dsh web: http://127.0.0.1:<端口>/?token=…`,
+  真 token 经环境变量传、不落盘),再用 `direct-tcpip` 把 `127.0.0.1:<DSH 端口>` 转发给手机。
+
+为什么要这样绕:DSH 的 `desktop` profile 由 Electron 独占,`dsh --profile desktop` 会被 CLI
+直接拒掉,所以 `dsh desktop` 原本根本没有实现;而插件不在 SSH 明文路径上(隧道直通 22),
+不接管入口就永远收不到这条命令。
+
+**打开期间的代价(面板上会写)**:Termius 连这条隧道会被前端拒绝——交互 shell 会明确回一句
+「请连原来的 SSH 隧道(端口 22)」。要用终端就关掉这个开关,隧道立刻回到 22。
+
+**安全边界**:前端只监听回环、host key 每次启动内存生成、`direct-tcpip` 只放行 DSH 端口;
+认证仍然只用插件生成的那把密钥,没有第二套凭据。
 
 手机端:Termius → Keychain → + → Import,把卡上「私钥 → 导入手机(Termius)」里整段
 (含 BEGIN/END 行)粘贴保存,主机认证选这把钥匙,连上面那条命令即可。
@@ -186,12 +207,21 @@ GET  /ssh-host/api/ssh/state
      (隧道上线后给出 `ssh <user>@<节点host> -p <远程端口>`,否则 null)/
      channel {enabled,running,hasToken}(中心卡的通道开关状态用)
      / remoteSession {active,count,ok,observedAt}(会话观测红绿灯)
+     / dshGo {enabled,running,port,attachedAt,attachCount}(对接开关;attachCount 只在
+     真收到 desktop 启动请求时增长,红绿灯以它为准)
      —— channel 三个值全是本地读:enabled 取自 state,running 取自 frpc 进程快照,
      hasToken 走密钥解析路径,**不额外打官方 API、不做二次 TCP 探测**(这路由前端 8 秒轮一次)
      —— remoteSession 只数 22 端口上的 ESTABLISHED 连接(netstat,8s TTL 缓存,
      通道关着时一次都不采样)。它回答「现在有没有 SSH 客户端连着」,**回答不了客户端是谁**:
      插件不在 SSH 明文路径上(隧道 local_port=22 直通 sshd),所以文案不写「DSH Go 连成功」。
      ok=false = 采样失败,前端降级为琥珀色「会话未观测」,不报红
+
+POST /ssh-host/api/ssh/dsh-go
+     body {enabled}:开=起 SSH 前端并把 SSH 隧道 local_port 指过去(DSH Go 的 `dsh desktop`
+     才有落点),关=停前端、local_port 改回 22(纯粹 SSH 主机)。改端口后自动重启 frpc。
+     200 {ok, enabled, port, attachedAt, attachCount} / 502 {ok:false, error}
+     错误:no-ssh-tunnel(还没建 SSH 隧道)/ no-key(还没生成密钥)/
+           no-launch-token(拿不到 DSH 启动 token,重启 DSH 后再开)
 
 POST /ssh-host/api/ssh/key/create
      生成专用 ed25519 密钥对:私钥/公钥落 ~/.dsh/dsh-ssh-host/(0600),
@@ -310,7 +340,7 @@ time curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:<端口>/ssh-host
 也是拿一个临时 `DSH_HOME` 跑冷启动)。
 
 ```bash
-npm test                 # 26 个套件、964 项,串行跑并汇总
+npm test                 # 27 个套件、990 项,串行跑并汇总
 # npm test 会核对 README 的套件表与总数：文档数字一过期,测试直接红
 npm test -- path         # 只跑名字含关键字的套件
 ```
@@ -324,7 +354,8 @@ npm test -- path         # 只跑名字含关键字的套件
 
 | 套件 | 项 | 覆盖 |
 |---|---|---|
-| `ssh-host-test.mjs` | 135 | SSH 主机能力:ed25519 密钥(**用系统 `ssh-keygen -y` 反推公钥来判封装是否合法**)/ authorized_keys upsert / 连接命令 / sshd 探测注入点 / SSH 路由 / 旧 PKCS8 私钥自愈 / 节点三级回退 / 建隧道自动开启通道 / frpc 多隧道(NATFRP_TARGET) |
+| `ssh-front-test.mjs` | 19 | 「对接 DSH Go」的 SSH 前端(**本机 loopback 起真 ssh2 握手**)：公钥逐字节授权 / 错误密钥被拒 / `dsh desktop` 经 PATH 垫片打印启动行并保活 / 交互 shell 明确拒绝 / direct-tcpip 只放行 DSH 端口 |
+| `ssh-host-test.mjs` | 142 | SSH 主机能力:ed25519 密钥(**用系统 `ssh-keygen -y` 反推公钥来判封装是否合法**)/ authorized_keys upsert / 连接命令 / sshd 探测注入点 / SSH 路由 / 旧 PKCS8 私钥自愈 / 节点三级回退 / 建隧道自动开启通道 / frpc 多隧道(NATFRP_TARGET) |
 | `order-test.mjs` | 125 | 解锁顺序、表单排布、按钮文案与出现条件、SSH 中心卡契约(复制回退 / 深链分支 / 区内不出现口令字样 / **自动生成密钥与自动建隧道的触发条件、只试一次与「重试」出口**)、「高级」区折叠边界(遗留项确实在区内、日志与安装引导确实在区外) |
 | `paths-test.mjs` | 51 | frpc / DSH home 路径解析(含 `$DSH_HOME` 空白、`PROFILE_DIR` 反推) |
 | `installer-test.mjs` | 52 | frpc 资产挑选 / 下载 / 版本校验 / 版本号提取与比较 |

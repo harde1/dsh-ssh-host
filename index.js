@@ -21,6 +21,7 @@ import { createPasswordGate, createGateServer } from './gate.mjs'
 import { installFrpc, checkInstalled, fetchClients, pickAsset, extractSakuraVersion, compareFrpcVersion } from './installer.mjs'
 import { resolveDshHome, resolveFrpcPath, displayPath } from './paths.mjs'
 import { checkSshd, countSshSessions, generateHostKey, fingerprintOf as sshFingerprintOf, installPublicKey, buildConnectCommand, SSHD_PORT, toOpenSshPrivatePem, publicKeyFromPrivatePem } from './ssh.mjs'
+import { buildAttachLine, buildShimScript, startSshFront } from './ssh-front.mjs'
 
 export const name = 'sshhost'
 export const inject = ['credentials', 'webServer', 'timer', 'connection']
@@ -199,6 +200,13 @@ export function apply(ctx, config = {}) {
   let tunnelId = String(state.tunnelId ?? config.tunnelId ?? '').trim()
   // SSH 隧道 ID:与 DSH 隧道并存,同一 frpc 进程承载(NATFRP_TARGET 多值)。
   let sshTunnelId = String(state.sshTunnelId ?? '').trim()
+  // 「对接 DSH Go」开关：开启时插件自己当 SSH 前端并把 SSH 隧道指过来（此时 Termius
+  // 在这条隧道上连不进来，交互终端请走原来的 22 直连 —— 关闭开关就回到纯 SSH 主机）。
+  let dshGoEnabled = state.dshGo === true
+  let sshFront = null          // 运行中的 SSH 前端 {port, close}
+  let sshFrontPort = null      // 前端监听端口 = 隧道 local_port（开启时）
+  let dshGoAttachedAt = 0      // 最近一次收到 desktop 启动请求的时间
+  let dshGoAttachCount = 0
   // ── 撞车自愈：SSH 隧道与 DSH 隧道必须是两条不同的官方隧道 ──
   // 真机事故（2026-11-13）：账号免费档只有一条官方隧道时，自动建 SSH 隧道会把它复用，
   // 于是 sshTunnelId === tunnelId。startAll 的 Set 去重后 NATFRP_TARGET 只剩一个 ID，
@@ -498,6 +506,111 @@ export function apply(ctx, config = {}) {
     }
   }
 
+  // ── 对接 DSH Go（SSH 前端模式）────────────────────────────────────────────
+  //
+  // 开启：插件起自己的 SSH 前端（只绑 127.0.0.1），把 SSH 隧道的 local_port 从 22 改成
+  //       前端端口。这样 DSH Go 的启动命令 `dsh desktop` 才到得了插件手里。
+  // 关闭：停前端、把隧道改回 22 —— 此时就是纯粹的 SSH 主机，系统 sshd 原样服务。
+  //
+  // ⚠️ 前端取代 sshd 只发生在「那条隧道」上：开启期间 Termius 交互终端连不上，
+  //    前端会明确回一句「请连原来的 SSH 隧道（端口 22）」。这是刻意取舍，面板文案写清。
+  const SSH_FRONT_SHIM_DIR = join(DATA_DIR, 'bin')
+
+  /** 桌面版现在的 launch token（每次进程启动都变）：与网关注入的是同一个来源。 */
+  function launchTokenNow() {
+    try {
+      const conn = ctx.connection
+      if (!conn || typeof conn.authenticatedUrl !== 'function') return ''
+      const target = dshPortNow()
+      if (!target) return ''
+      const u = new URL(conn.authenticatedUrl(`http://127.0.0.1:${target}`))
+      return u.searchParams.get('token') ?? ''
+    } catch {
+      return ''
+    }
+  }
+
+  /** DSH Go 要抓的启动行（`dsh web: http://127.0.0.1:<port>/?token=…`）；缺 token 返回 ''。 */
+  function attachLineNow() {
+    const port = dshPortNow()
+    const token = launchTokenNow()
+    return port && token ? buildAttachLine({ port, token }) : ''
+  }
+
+  /** 真 dsh 的位置：垫片的透传目标。找不到就交给 PATH（相当于原样行为）。 */
+  function resolveRealDsh() {
+    for (const c of ['/usr/local/bin/dsh', '/opt/homebrew/bin/dsh']) {
+      try { if (existsSync(c)) return c } catch { /* next */ }
+    }
+    return 'dsh'
+  }
+
+  /** 写垫片（DATA_DIR/bin/dsh，0755）。它只在 SSH 前端起的会话里通过 PATH 生效。 */
+  function ensureShim() {
+    mkdirSync(SSH_FRONT_SHIM_DIR, { recursive: true, mode: 0o700 })
+    writeFileSync(join(SSH_FRONT_SHIM_DIR, 'dsh'), buildShimScript(resolveRealDsh()), { mode: 0o755 })
+    return SSH_FRONT_SHIM_DIR
+  }
+
+  /** 把 SSH 隧道的 local_port 指到 [port]（22 = 直连 sshd，其余 = 插件前端）。 */
+  async function repointSshTunnel(port) {
+    if (!sshTunnelId) return { skipped: true, reason: 'no-ssh-tunnel' }
+    const token = await resolveToken()
+    const api = apiOrNull(token, READ_TIMEOUT_MS)
+    if (!api) return { ok: false, error: 'no-api' }
+    try {
+      await api.tunnelEdit({ id: Number(sshTunnelId), local_ip: '127.0.0.1', local_port: Number(port) })
+      logInfo(`natfrp: SSH 隧道 local_port → ${port}${Number(port) === SSHD_PORT ? '（直连 sshd）' : '（插件 SSH 前端）'}`)
+      return { ok: true, port: Number(port) }
+    } catch (e) {
+      const msg = e instanceof ApiError ? e.message : String(e?.message ?? e)
+      logWarn(`natfrp: 改 SSH 隧道端口失败: ${msg}`)
+      return { ok: false, error: msg }
+    }
+  }
+
+  /** 幂等地把前端拉起来并指向它。返回 {ok} 或 {ok:false,error}。 */
+  async function startDshGo() {
+    if (sshFront) return { ok: true, port: sshFrontPort, already: true }
+    if (!sshTunnelId) return { ok: false, error: 'no-ssh-tunnel' }
+    const attachLine = attachLineNow()
+    if (!attachLine) return { ok: false, error: 'no-launch-token' }
+    let keyLine = ''
+    try {
+      keyLine = safeRead(join(DATA_DIR, 'ssh-host-key.pub')) ?? ''
+    } catch { /* 下面按失败处理 */ }
+    if (!keyLine) return { ok: false, error: 'no-key' }
+    try {
+      sshFront = await startSshFront({
+        publicKeyLine: keyLine.trim(),
+        attachLine,
+        shimDir: ensureShim(),
+        desktopPort: dshPortNow(),
+        onAttach: () => { dshGoAttachedAt = Date.now(); dshGoAttachCount += 1 },
+        log: (m) => logInfo(`natfrp: ${m}`),
+      })
+      sshFrontPort = sshFront.port
+      const rep = await repointSshTunnel(sshFrontPort)
+      if (!rep.ok && !rep.skipped) return { ok: false, error: rep.error ?? 'repoint-failed' }
+      return { ok: true, port: sshFrontPort }
+    } catch (e) {
+      try { await sshFront?.close?.() } catch { /* noop */ }
+      sshFront = null
+      sshFrontPort = null
+      return { ok: false, error: String(e?.message ?? e) }
+    }
+  }
+
+  /** 幂等地停掉前端并把隧道还给 22。 */
+  async function stopDshGo() {
+    const had = Boolean(sshFront)
+    try { await sshFront?.close?.() } catch { /* noop */ }
+    sshFront = null
+    sshFrontPort = null
+    const rep = await repointSshTunnel(SSHD_PORT)
+    return { ok: !had || rep.ok !== false, closed: had, ...(rep.ok === false ? { error: rep.error } : {}) }
+  }
+
   /**
    * 启动流程。
    *
@@ -531,6 +644,12 @@ export function apply(ctx, config = {}) {
         const report = await autoAlign(api)
         if (report.error) logWarn(`natfrp: 隧道端口检查失败: ${JSON.stringify(report)}`)
         frpc.note(`隧道端口: ${JSON.stringify(report)}`)
+      }
+      // 「对接 DSH Go」：拉起 frpc 前必把 SSH 隧道指回前端 —— 隧道被重建、面板改过端口
+      // 都会让 local_port 漂回 22，用户看到的就是「开关开着但 DSH Go 连不上」。
+      if (dshGoEnabled) {
+        const up = await startDshGo()
+        if (!up.ok) logWarn(`natfrp: 对接 DSH Go 未就绪（${up.error}），隧道保持直连 sshd`)
       }
       const r = frpc.start({ tunnelIds: targetIds })
       if (!r.ok) {
@@ -1701,6 +1820,48 @@ export function apply(ctx, config = {}) {
         // 会话观测结果（前端红绿灯用）：active 只说明「22 端口上有 ESTABLISHED 会话」，
         // 不代表对端是哪个客户端 —— 插件看不到 SSH 明文，别在前端把它说成「DSH Go 已连上」。
         remoteSession,
+        // 「对接 DSH Go」状态：enabled=开关落盘值 / running=前端在听 / port=隧道当前指向 /
+        // attachedAt+attachCount=真实收到过几次 desktop 启动请求（红绿灯只认这个，不猜）。
+        dshGo: {
+          enabled: dshGoEnabled,
+          running: Boolean(sshFront),
+          port: sshFrontPort,
+          attachedAt: dshGoAttachedAt,
+          attachCount: dshGoAttachCount,
+        },
+      })
+      return true
+    }
+
+    // 对接 DSH Go 开关：开 = 插件当 SSH 前端并把 SSH 隧道指过来；关 = 回到纯 SSH 主机。
+    // 默认关闭：这是显式的模式切换，不该有人「装完就被换掉 SSH 入口」。
+    if (path === '/ssh-host/api/ssh/dsh-go' && req.method === 'POST') {
+      const raw = await readBody(req, 4096)
+      let body = {}
+      try { body = JSON.parse(raw || '{}') } catch { /* 空 body 视为关闭 */ }
+      const want = body.enabled === true
+      let out
+      if (want) {
+        dshGoEnabled = true
+        out = await startDshGo()
+        if (!out.ok) dshGoEnabled = false
+      } else {
+        dshGoEnabled = false
+        out = await stopDshGo()
+      }
+      writeState({ dshGo: dshGoEnabled })
+      if (out.ok !== false) {
+        // 隧道 local_port 变了，frpc 必须重连才会按新端口转发
+        frpc.stop()
+        void startAll(want ? 'dsh-go on' : 'dsh-go off')
+      }
+      json(res, out.ok === false ? 502 : 200, {
+        ok: out.ok !== false,
+        enabled: dshGoEnabled,
+        port: sshFrontPort,
+        attachedAt: dshGoAttachedAt,
+        attachCount: dshGoAttachCount,
+        error: out.error ?? null,
       })
       return true
     }
@@ -2138,8 +2299,13 @@ export function apply(ctx, config = {}) {
   ctx.effect(() => async () => {
     frpc.stop()
     if (gateServer) await gateServer.close().catch(() => {})
+    // 卸载/热更时必须把 SSH 前端一起收掉：否则隧道被指到一个没人监听的端口，
+    // 用户看到的就是「开关还开着但连不上」。
+    try { await sshFront?.close?.() } catch { /* noop */ }
+    sshFront = null
+    sshFrontPort = null
     logInfo('natfrp: 已停止')
-  }, 'natfrp: frpc + gate')
+  }, 'natfrp: frpc + gate + ssh-front')
 
   return () => {}
 }

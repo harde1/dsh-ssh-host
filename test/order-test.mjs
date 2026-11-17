@@ -164,10 +164,13 @@ rec('README 诚实标注预览 React 桩与真 React 不等价', /preview-render
 // 数字最容易飘：每次加断言 README 的项数就过期一次。这里不写死数字，
 // 而是校验 README 自己内部一致 —— 正文声明的总数/套件数必须等于套件表求和，
 // 且表里的套件名必须和 test/ 目录实际文件一一对应。
-const table = [...readme.matchAll(/^\| `([a-z-]+\.mjs)` \| (\d+) \|/gm)]
-const declared = +(readme.match(/26 个套件、(\d+) 项/) || [])[1]
-  || +(readme.match(/# 26 个套件、(\d+) 项/) || [])[1]
-rec('README 套件表能解析出 26 行', table.length === 26, `${table.length} 行`)
+const table = [...readme.matchAll(/^\| `([a-z0-9-]+\.mjs)` \| (\d+) \|/gm)]
+// 套件数也不再写死：它跟着 test/ 目录长，写死 26 就等于每次加套件都制造一个必然过期点。
+const declaredPair = readme.match(/(\d+) 个套件、(\d+) 项/) ?? []
+const declaredSuites = Number(declaredPair[1]) || 0
+const declared = Number(declaredPair[2]) || 0
+rec('README 套件表行数 = 正文声明的套件数',
+  table.length > 0 && table.length === declaredSuites, `${table.length} 行 / 声明 ${declaredSuites}`)
 rec('README 正文声明的总项数 = 套件表求和',
   table.reduce((a, m) => a + Number(m[2]), 0) === declared, `表=${table.reduce((a, m) => a + Number(m[2]), 0)} 声明=${declared}`)
 // 正文里凡是「N 个套件、M 项」这种成对声明,数字必须全部一致(不写死具体值:

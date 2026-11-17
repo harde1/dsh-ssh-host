@@ -262,6 +262,8 @@ rec('ETIMEDOUT → 未就绪', parseSshdProbeResult('ETIMEDOUT') === false)
     new Response(JSON.stringify(data), { status, headers: { 'content-type': 'application/json' } })
   const realFetch = globalThis.fetch
   const apiCalls = []
+  // 「对接 DSH Go」要改 SSH 隧道的 local_port：记下每次 edit，断言 22 ↔ 前端端口两个方向。
+  const tunnelEditCalls = []
   let tunnelsList = []
   // 节点表桩：默认只给可创建的内地节点 2（原有断言依赖它);自动化用例可整体替换。
   let nodesMap = { 2: { name: '内地节点', host: 'cn.natfrp.cloud', description: '', vip: 0, flag: 0b0100 | 0b1000 } }
@@ -290,6 +292,10 @@ rec('ETIMEDOUT → 未就绪', parseSshdProbeResult('ETIMEDOUT') === false)
         local_ip: '127.0.0.1', local_port: Number(body?.local_port), online: true, remote: 23456,
       }]
       return jsonRes({ id, name: body?.name ?? 'SSH', remote: 23456 })
+    }
+    if (u.pathname === '/v4/tunnel/edit' && method === 'POST') {
+      tunnelEditCalls.push(body)
+      return jsonRes({ code: 0 })
     }
     if (u.pathname === '/v4/tunnel/delete' && method === 'POST') {
       const ids = String(body?.ids ?? '').split(',').map(Number)
@@ -413,6 +419,60 @@ rec('ETIMEDOUT → 未就绪', parseSshdProbeResult('ETIMEDOUT') === false)
           `targetExists=${existsSync(f4.targetFile)} running=${s4.body?.frpc?.running}`)
         await srv4.close()
       })
+  }
+
+  // ── 「对接 DSH Go」开关：SSH 前端起来 + 隧道 local_port 改指向 + 关掉还回 22 ──
+  // 全程离线：真起一个 ssh2 前端（本机 loopback），官方 API 被 fetch 桩拦下。
+  {
+    const kpDG = generateHostKey()
+    const dataDir = join(home, 'dsh-ssh-host')
+    mkdirSync(dataDir, { recursive: true })
+    writeFileSync(join(dataDir, 'ssh-host-key.pub'), `${kpDG.publicKey}\n`, { mode: 0o600 })
+    const GPdg = await freePort()
+    const fdg = fakeFrpc()
+    tunnelEditCalls.length = 0
+    tunnelsList = [
+      { id: 111, name: 'DSH', type: 'tcp', local_ip: '127.0.0.1', local_port: GPdg, online: true, remote: 20001, node: 2 },
+      { id: 222, name: 'SSH', type: 'tcp', local_ip: '127.0.0.1', local_port: 22, online: true, remote: 20002, node: 2 },
+    ]
+    await withApply({ enabled: true, tunnelId: '111', sshTunnelId: '222', gatePort: GPdg },
+      { enabled: true, tunnelId: '111', gatePort: GPdg, frpcPath: fdg.path, autoAlign: false },
+      async (box) => {
+        const srv = await serve(box)
+        // 默认关闭：纯 SSH 主机
+        let st = await getJSON(srv.base, '/ssh-host/api/ssh/state')
+        rec('对接 DSH Go：默认关闭（enabled=false / 前端未监听）',
+          st.body?.dshGo?.enabled === false && st.body?.dshGo?.running === false,
+          JSON.stringify(st.body?.dshGo))
+        // 打开
+        const on = await postJSON(srv.base, '/ssh-host/api/ssh/dsh-go', { enabled: true })
+        const port = on.body?.port
+        rec('对接 DSH Go：打开 → 200 且返回前端端口',
+          on.status === 200 && on.body?.ok === true && Number(port) > 0,
+          `status=${on.status} body=${JSON.stringify(on.body)}`)
+        rec('对接 DSH Go：打开后把 SSH 隧道 local_port 指到前端端口',
+          tunnelEditCalls.some((c) => Number(c?.id) === 222 && Number(c?.local_port) === Number(port)),
+          JSON.stringify(tunnelEditCalls.map((c) => [c?.id, c?.local_port])))
+        st = await getJSON(srv.base, '/ssh-host/api/ssh/state')
+        rec('对接 DSH Go：/ssh/state 显示 enabled + running + port',
+          st.body?.dshGo?.enabled === true && st.body?.dshGo?.running === true
+          && Number(st.body?.dshGo?.port) === Number(port), JSON.stringify(st.body?.dshGo))
+        // 关闭
+        tunnelEditCalls.length = 0
+        const off = await postJSON(srv.base, '/ssh-host/api/ssh/dsh-go', { enabled: false })
+        rec('对接 DSH Go：关闭 → 200 且前端已停',
+          off.status === 200 && off.body?.ok === true, `status=${off.status} body=${JSON.stringify(off.body)}`)
+        rec('对接 DSH Go：关闭后把 SSH 隧道 local_port 还给 22（纯 SSH 主机）',
+          tunnelEditCalls.some((c) => Number(c?.id) === 222 && Number(c?.local_port) === 22),
+          JSON.stringify(tunnelEditCalls.map((c) => [c?.id, c?.local_port])))
+        st = await getJSON(srv.base, '/ssh-host/api/ssh/state')
+        rec('对接 DSH Go：关闭后 /ssh/state 回到 running=false',
+          st.body?.dshGo?.enabled === false && st.body?.dshGo?.running === false, JSON.stringify(st.body?.dshGo))
+        await srv.close()
+      })
+    // 清掉本块临时写入的公钥：后面 (d)/(e) 块要验证 key/create 自己落盘的权限与内容，
+    // 留着这份「预置文件」会让它们读到别人的权限位。
+    rmSync(join(dataDir, 'ssh-host-key.pub'), { force: true })
   }
 
   // ── 会话观测（红绿灯）路由级：/ssh/state.remoteSession ──

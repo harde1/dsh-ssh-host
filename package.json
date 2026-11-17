@@ -79,5 +79,8 @@
   "scripts": {
     "test": "node test-all.mjs",
     "preview": "node preview-render.mjs"
+  },
+  "dependencies": {
+    "ssh2": "^1.17.0"
   }
 }
