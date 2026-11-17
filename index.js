@@ -239,7 +239,7 @@ export function apply(ctx, config = {}) {
    * 是为了让「连续两次轮询之间不重复采样」成立。
    */
   const SSH_SESSION_TTL_MS = 8000
-  let sshSessionCache = { at: 0, value: { ok: true, count: 0 } }
+  let sshSessionCache = { at: 0, portsKey: '', value: { ok: true, count: 0 } }
   try {
     const pk = safeRead(join(DATA_DIR, 'ssh-host-key'))
     if (pk) {
@@ -1868,13 +1868,18 @@ export function apply(ctx, config = {}) {
       // SSH 会话观测（只读）：只数 22 端口上的 ESTABLISHED，回答「现在有没有客户端连着」。
       // 通道没开 / frpc 没跑时一次都不采样（那种状态不可能有会话，没必要起子进程）；
       // 采样失败降级成「未观测」（ok:false），绝不报成红色故障 —— 看不见不等于坏了。
-      let remoteSession = { active: false, count: 0, ok: false, observedAt: 0 }
+      let remoteSession = { active: false, count: 0, ok: false, observedAt: 0, counts: {}, ports: [] }
       if (enabled && frpcSnap?.running) {
+        // 门不止一个：纯 SSH 主机是 22；「对接 DSH Go」开着时隧道的 local_port 指向插件
+        // 前端，22 上一条连接都没有 —— 只数 22 就会在 DSH Go 明明连着的时候报「暂无会话」。
+        const ports = [SSHD_PORT, ...(sshFrontPort ? [sshFrontPort] : [])]
         const now = Date.now()
-        if (now - sshSessionCache.at >= SSH_SESSION_TTL_MS) {
+        const portsKey = ports.join(',')
+        if (now - sshSessionCache.at >= SSH_SESSION_TTL_MS || sshSessionCache.portsKey !== portsKey) {
           sshSessionCache = {
             at: now,
-            value: await countSshSessions().catch(() => ({ ok: false, count: 0 })),
+            portsKey,
+            value: await countSshSessions({ ports }).catch(() => ({ ok: false, count: 0, counts: {} })),
           }
         }
         const sample = sshSessionCache.value
@@ -1883,6 +1888,8 @@ export function apply(ctx, config = {}) {
           count: sample.count,
           ok: sample.ok,
           observedAt: sshSessionCache.at,
+          counts: sample.counts ?? {},
+          ports,
         }
       }
       json(res, 200, {

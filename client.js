@@ -2663,7 +2663,23 @@ body[data-sshhost-mode="narrow"] button[aria-label="SSH 主机"] > .sshhost-swit
             ? badge(
               ssh.remoteSession.active === true,
               ssh.remoteSession.active === true
-                ? `SSH 已连入 ${Number(ssh.remoteSession.count) || 1} 路`
+                ? (() => {
+                  // 门不止一个：22 是纯 SSH 主机，DSH Go 模式时隧道指向插件前端。
+                  // 分开说清楚是谁连着，别用一句「SSH 已连入」把 DSH Go 也糊进去。
+                  const counts = ssh.remoteSession.counts ?? {}
+                  const frontPort = Number(ssh.dshGo?.port) || 0
+                  const viaFront = frontPort ? Number(counts[frontPort] ?? counts[String(frontPort)]) || 0 : 0
+                  // 22 是系统 sshd 的门（纯 SSH 主机时唯一开着的那个）
+                  const sshdPort = 22
+                  const viaSshd = Number(counts[sshdPort] ?? counts[String(sshdPort)]) || 0
+                  // 只说「这条通道上有人连着」：前端端口只有插件自己在听，能连上就一定是
+                  // 走 DSH Go 那条门进来的；但这不等于能确认对面装的是哪个客户端，
+                  // 所以不写「某个客户端连成功了」这种验证不了的断言。
+                  if (viaFront > 0 && viaSshd > 0) return `DSH Go 通道 ${viaFront} 路 · SSH ${viaSshd} 路`
+                  if (viaFront > 0) return `DSH Go 通道已连入 ${viaFront} 路`
+                  if (viaSshd > 0) return `SSH 已连入 ${viaSshd} 路`
+                  return `SSH 已连入 ${Number(ssh.remoteSession.count) || 1} 路`
+                })()
                 : ssh.remoteSession.ok === false ? '会话未观测' : '暂无 SSH 会话',
               true,
             )

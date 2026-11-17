@@ -245,8 +245,12 @@ rec('hero 卡把 sshd 未开 / 无密钥 / 无隧道三种阻塞各自说清',
 // 所以文案绝不能写成「DSH Go 连接成功」——那是我们验证不了的断言。
 rec('hero 卡有会话观测灯（active / 暂无 / 未观测 三态文案）',
   /SSH 已连入/.test(heroSrc) && /暂无 SSH 会话/.test(heroSrc) && /会话未观测/.test(heroSrc))
-rec('会话观测灯不冒充客户端身份（不出现「DSH Go 连接成功」这类无法验证的断言）',
-  !/DSH Go 连接成功|DSH Go 已连/.test(heroSrc))
+rec('会话观测灯按门分开说（DSH Go 通道 vs 22 端口的 SSH）',
+  /DSH Go 通道已连入/.test(heroSrc) && /counts/.test(heroSrc))
+// 能验证的是「这条通道上有人连着」（前端端口只有插件在听），不能验证的是「对面装的是 DSH Go、
+// 而且连成功了」。所以只禁后者，并把前者的措辞钉住。
+rec('会话观测灯不冒充「连接成功」（只说通道上有连接，不说某客户端连成功了）',
+  !/DSH Go 连接成功|DSH Go 已连接/.test(heroSrc))
 rec('旧版硬编码深链已不再出现在 SSH 区（改由 darwinMajor 判定）',
   !/location\.href = 'x-apple\.systempreferences:com\.apple\.preferences\.sharing\?Services'/.test(client))
 

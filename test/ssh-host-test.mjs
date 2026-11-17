@@ -28,7 +28,7 @@ import {
   buildOpenSshPublicKey, generateHostKey, fingerprintOf,
   installPublicKey, buildConnectCommand, parseSshdProbeResult,
   checkSshd, setSshdProberForTests, toOpenSshPrivatePem, publicKeyFromPrivatePem,
-  parseEstablishedSessions, countSshSessions, setSshSessionProberForTests,
+  parseEstablishedSessions, parseEstablishedSessionsByPort, countSshSessions, setSshSessionProberForTests,
 } from '../ssh.mjs'
 
 const results = []
@@ -62,6 +62,21 @@ const homeForTest = mkdtempSync(join(tmpdir(), 'dsh-ssh-keygen-'))
     parseEstablishedSessions(linuxSample) === 1, String(parseEstablishedSessions(linuxSample)))
   rec('parseEstablishedSessions：空输入/垃圾输入为 0',
     parseEstablishedSessions('') === 0 && parseEstablishedSessions('garbage\n\n') === 0)
+  // 真机反馈（2026-11-17）：「暂无 SSH 会话」不准确 —— DSH Go 模式时隧道指向插件前端，
+  // 22 上一个连接都没有，只数 22 就永远报「暂无」。必须把「所有可能的门」一起数。
+  {
+    const dual = [
+      'tcp4       0      0  127.0.0.1.22           127.0.0.1.50001        ESTABLISHED',
+      'tcp4       0      0  127.0.0.1.50001        127.0.0.1.22           ESTABLISHED',
+      'tcp4       0      0  127.0.0.1.61000        127.0.0.1.50002        ESTABLISHED',
+    ].join('\n')
+    const byPort = parseEstablishedSessionsByPort(dual, [22, 61000])
+    rec('parseEstablishedSessionsByPort：一次数多个门（22 与插件前端各 1 路）',
+      byPort.get(22) === 1 && byPort.get(61000) === 1, JSON.stringify([...byPort]))
+    rec('parseEstablishedSessions：数组参数返回总和、单值参数行为不变',
+      parseEstablishedSessions(dual, [22, 61000]) === 2 && parseEstablishedSessions(dual) === 1)
+  }
+
   rec('parseEstablishedSessions：非 22 端口不计（参数化端口）',
     parseEstablishedSessions('tcp4 0 0 127.0.0.1.2222 127.0.0.1.40000 ESTABLISHED', 2222) === 1
     && parseEstablishedSessions('tcp4 0 0 127.0.0.1.22 127.0.0.1.40000 ESTABLISHED', 2222) === 0)
@@ -430,6 +445,7 @@ rec('ETIMEDOUT → 未就绪', parseSshdProbeResult('ETIMEDOUT') === false)
       '对接 DSH Go：默认关闭（enabled=false / 前端未监听）',
       '对接 DSH Go：打开 → 200 且返回前端端口',
       '对接 DSH Go：打开后把 SSH 隧道 local_port 指到前端端口',
+      '对接 DSH Go：会话观测把「门」扩到前端端口（不只数 22）',
       '对接 DSH Go：/ssh/state 显示 enabled + running + port',
       '对接 DSH Go：关闭 → 200 且前端已停',
       '对接 DSH Go：关闭后把 SSH 隧道 local_port 还给 22（纯 SSH 主机）',
@@ -466,6 +482,10 @@ rec('ETIMEDOUT → 未就绪', parseSshdProbeResult('ETIMEDOUT') === false)
           tunnelEditCalls.some((c) => Number(c?.id) === 222 && Number(c?.local_port) === Number(port)),
           JSON.stringify(tunnelEditCalls.map((c) => [c?.id, c?.local_port])))
         st = await getJSON(srv.base, '/ssh-host/api/ssh/state')
+        rec('对接 DSH Go：会话观测把「门」扩到前端端口（不只数 22）',
+          Array.isArray(st.body?.remoteSession?.ports) && st.body.remoteSession.ports.includes(22)
+          && st.body.remoteSession.ports.includes(Number(port)),
+          JSON.stringify(st.body?.remoteSession?.ports))
         rec('对接 DSH Go：/ssh/state 显示 enabled + running + port',
           st.body?.dshGo?.enabled === true && st.body?.dshGo?.running === true
           && Number(st.body?.dshGo?.port) === Number(port), JSON.stringify(st.body?.dshGo))

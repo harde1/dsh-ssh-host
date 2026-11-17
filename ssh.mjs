@@ -268,35 +268,61 @@ function addressPort(addr) {
 }
 
 /**
- * 从 `netstat` 文本里数 [port] 上的 ESTABLISHED 会话。
+ * 从 `netstat` 文本里数各个端口上的 ESTABLISHED 会话。
  *
- * 只数**服务端那一行**(本地地址以 [port] 结尾)。一条会话在内核表里有两行
+ * 只数**服务端那一行**(本地地址以该端口结尾)。一条会话在内核表里有两行
  * (服务端 + 客户端侧),客户端侧的本地端口是临时端口,不会被计入。
  * LISTEN / SYN_SENT / TIME_WAIT 等一律不计。
+ *
+ * ⚠️ 必须同时数「所有可能的门」:纯 SSH 主机时门是 22;「对接 DSH Go」开着时隧道的
+ *    local_port 指向插件前端,22 上一个连接都没有 —— 只数 22 就会在 DSH Go 明明连着
+ *    的时候显示「暂无 SSH 会话」(真机反馈 2026-11-17)。
+ *
+ * @param {string} text netstat 输出
+ * @param {number|number[]} port 端口或端口数组
+ * @returns {Map<number, number>} 端口 → 会话数(只含真出现过的端口)
  */
-export function parseEstablishedSessions(text, port = SSHD_PORT) {
-  let count = 0
+export function parseEstablishedSessionsByPort(text, port = SSHD_PORT) {
+  const wanted = new Set((Array.isArray(port) ? port : [port]).map(Number).filter((n) => Number.isInteger(n) && n > 0))
+  const counts = new Map()
   for (const raw of String(text ?? '').split('\n')) {
     const m = /^tcp[46]?\s+\d+\s+\d+\s+(\S+)\s+(\S+)\s+ESTABLISHED\b/.exec(raw.trim())
     if (!m) continue
-    if (addressPort(m[1]) === port) count++
+    const p = addressPort(m[1])
+    if (p == null || !wanted.has(p)) continue
+    counts.set(p, (counts.get(p) ?? 0) + 1)
   }
+  return counts
+}
+
+/** 单端口（或端口数组总和）的会话数；保留给只看一个门的调用方与老测试。 */
+export function parseEstablishedSessions(text, port = SSHD_PORT) {
+  let count = 0
+  for (const n of parseEstablishedSessionsByPort(text, port).values()) count += n
   return count
 }
 
 /**
  * 采样当前 SSH 会话数。**失败不抛**：返回 `{ok:false}` 让调用方降级为「未观测」——
  * 一次 netstat 失败说明我们看不见，不是 SSH 坏了，不能把灯点成红色。
+ *
+ * @param {object} [opts]
+ * @param {number|number[]} [opts.ports] 要一起数的门（默认只数 22）
+ * @returns {Promise<{ok:boolean,count:number,counts:Record<string,number>}>}
  */
-export async function countSshSessions({ port = SSHD_PORT, timeoutMs = 1500, exec = null } = {}) {
-  if (sshSessionProber) return sshSessionProber({ port })
+export async function countSshSessions({ port = SSHD_PORT, ports = null, timeoutMs = 1500, exec = null } = {}) {
+  const wanted = ports ?? port
+  if (sshSessionProber) return sshSessionProber({ port: wanted })
   const { execFile } = await import('node:child_process')
   const run = exec ?? execFile
   const args = process.platform === 'darwin' ? ['-an', '-p', 'tcp'] : ['-an', '-t']
   return new Promise((resolve) => {
     run('netstat', args, { timeout: timeoutMs, maxBuffer: 1 << 20 }, (err, stdout) => {
-      if (err) resolve({ ok: false, count: 0 })
-      else resolve({ ok: true, count: parseEstablishedSessions(stdout, port) })
+      if (err) return resolve({ ok: false, count: 0, counts: {} })
+      const byPort = parseEstablishedSessionsByPort(stdout, wanted)
+      let count = 0
+      for (const n of byPort.values()) count += n
+      resolve({ ok: true, count, counts: Object.fromEntries(byPort) })
     })
   })
 }
