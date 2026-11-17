@@ -56,6 +56,11 @@ DSH Go 的 `DshClient.login()`（dsh-go `packages/dsh_client/lib/src/connection.
 这就是 `connection.dart:312-336` 那四步的原样复刻，只是把「桌面上真正跑的那个 dsh web」
 换成了桌面版本身。
 
+**真机验收（2026-11-17）**：用户在 DSH Go 里按上述开关 + `dsh desktop` 连接成功，
+面板红绿灯变绿。此前两次失败（都被真机抓到）分别是：login shell 重建 PATH 导致垫片没命中
+（见上），以及外壳自己回重定向导致 `login redirect carried no dsh-auth cookie`。
+
+
 ### 「dsh web 外壳」而不是直接把钥匙递出去
 
 外壳就是一个 `createGateServer` 实例：DSH Go 拿 `/?token=<票>` 来换 cookie（这正是 `dsh web`
