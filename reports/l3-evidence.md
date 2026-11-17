@@ -107,3 +107,111 @@ $ sed -n '2174,2521p' client.js | grep -c "密码"   # SSH 卡片函数体（判
 | u-kniy6z | 预览夹具里「高级」区永远展开、①②③④ 全可见 | explained：夹具 mini-React 不支持惰性 useState(fn)，把函数本体当初值（恒真）；已修 slotOf，加 PREVIEW_VARIANT=adv 复验 |
 | u-qnf13x | README 声明 873 项 vs 核对报「实跑 763」 | explained：763 = 873 − order-test 的 110（当时 order-test 为 110 项），核对代码只在成功分支记 actual，order-test 自己红时它的项数凭空消失，报出假差值；已移出分支并人为改 999 复现验证 |
 
+## 5) 本轮刷新（HEAD=4ecebe9，生成时间 2026-11-17T11:26:31+08:00）
+
+> §1–§3 是 2026-11-13/14 的快照（HEAD 4cd081e，884 项）；`reports/l3-review.md:19-22`
+> 逐字引用了那份读数，所以**不覆盖**，只在此追加当前树的可复跑材料。
+> 期间变化：插件侧请求层超时/去重/退避 + 后端读路由超时（见
+> `reports/feedback-dsh-session-loading-stuck.md` §5），新增 66 项断言。
+> 本机 Node v22.23.4，Darwin 25.5.0。
+
+### 5a) 全量测试
+命令：`npm test`
+
+```
+> dsh-ssh-host@0.1.0 test
+> node test-all.mjs
+
+  ok   admin-auth-test.mjs        24/24
+  ok   apply-test.mjs             26/26
+  ok   credential-token-test.mjs  5/5
+  ok   defaults-test.mjs          19/19
+  ok   density-test.mjs           11/11
+  ok   diag-test.mjs              22/22
+  ok   dismiss-test.mjs           29/29
+  ok   external-test.mjs          24/24
+  ok   feedback-test.mjs          38/38
+  ok   fixes-test.mjs             97/97
+  ok   fresh-install-test.mjs     10/10
+  ok   gate-redirect-test.mjs     12/12
+  ok   installer-test.mjs         52/52
+  ok   order-test.mjs             123/123
+  ok   paths-test.mjs             51/51
+  ok   progressive-test.mjs       57/57
+  ok   scroll-test.mjs            14/14
+  ok   ssh-host-test.mjs          123/123
+  ok   state-test.mjs             22/22
+  ok   switch-test.mjs            11/11
+  ok   token-test.mjs             24/24
+  ok   traffic-test.mjs           28/28
+  ok   tunnel-create-test.mjs     50/50
+  ok   tunnel-delete-test.mjs     27/27
+  ok   update-check-test.mjs      15/15
+  ok   verify.mjs                 36/36
+
+全部通过：950/950 项，26 个套件
+(README 数字与实跑一致：950 项 / 26 个套件)
+```
+
+### 5b) 真机私钥复核（只读）
+命令：`./test/realmachine-keycheck.sh` → exit=0
+
+```
+== 1) 私钥封装 ==
+  PASS  PEM 头是 authkey 封装（BEGIN OPENSSH PRIVATE KEY）
+  PASS  权限 0600
+
+== 2) 系统 ssh-keygen 能不能读这把私钥（格式的权威判据） ==
+  PASS  ssh-keygen -y 成功推出公钥：ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIKX5…
+
+== 3) 推出的公钥 vs 本机 authorized_keys 的标记行（整行逐字节） ==
+  PASS  标记行恰好 1 条
+  PASS  authorized_keys 标记行 == ssh-keygen -y 输出（94 字节，逐字节一致）
+
+== 4) 三处公钥收敛（.pub / 私钥反推 / authorized_keys） ==
+  PASS  三处公钥是同一把（唯一值 1 个）
+
+== 5) 指纹（两条独立路径算同一个数） ==
+  PASS  指纹一致：SHA256:oX1LJ/qBTfFAYug60VC0jdxkZg23KuMOjfRI/eES7+c
+
+== 6) 自愈留下的备份：同一把密钥，只换了封装 ==
+  PASS  存在备份：/Users/mac/.dsh/dsh-ssh-host/ssh-host-key.pkcs8.bak（头为 -----BEGIN PRIVATE KEY-----）
+  PASS  SAME 32 字节 seed 完全一致： 6c0b077ef6fb79711461a301827bb32c6758c997a7a8f062825294ac42d424c4
+
+真机私钥复核：全部通过
+```
+
+### 5c) 判据锚点（grep 实录，按 HEAD=4ecebe9 重测）
+
+请求层给 `client.js` 加了约 130 行，§3 的旧窗口 2174/2521 已整体下移；
+下表是当前真实位置，**旧窗口的结论没有变化**（hero 体内「密码」仍为 0）：
+
+```
+$ grep -n "function SshHero" client.js
+2308:    function SshHero() {
+
+$ grep -n "复制连接命令\|打开系统设置" client.js
+2472:       * 复制连接命令 —— 手机端最常用的一步。     ← 新增：这一处是注释，不是文案
+2553:                h('button', { ... onClick: openSharing }, '打开系统设置…')
+2595:                      }, copied ? '已复制 ✓' : '复制连接命令')
+
+$ grep -n "── 高级（默认收起）" client.js
+1633:        // ── 高级（默认收起）：遗留的 DSH 隧道配置整段搬到这里，功能项一个不少 ──
+
+$ grep -cn "收起高级设置\|高级（DSH 隧道 / 端口 / 日志配置）" client.js
+1        # 两个字面量是同一个三元的两臂，只占一行
+
+$ sed -n '2308,2661p' client.js | grep -c "密码"    # SshHero 全函数体（判据要求的区域）
+0
+```
+
+> §3 记的锚点计数是 2，现在是 3：多出的 2472 行是本轮修请求层时写的**中文注释**
+> （解释「复制连接命令」这一步手机端最常用），不在渲染文案里，也不含「密码」。
+> hero 函数体按括号配平取到 2661 行，非硬编码窗口。
+
+### 5d) 本轮插件侧修复的可复核入口
+- 行为测试（不是正则看字面）：`node test/fixes-test.mjs` 第 10–13 节，57 项；
+- 说明与安全边界：`README.md`「面板请求的边界（超时 · 去重 · 退避）」一节；
+- 后端超时阶梯：前端 GET 8s（`client.js:57`）> 后端读路由 6s（`index.js:447`，
+  `readTimeoutMs` 可配 `index.js:175`）> 上游默认 12s（`natfrp.mjs:27`，写路由保留）。
+
