@@ -423,7 +423,19 @@ rec('ETIMEDOUT → 未就绪', parseSshdProbeResult('ETIMEDOUT') === false)
 
   // ── 「对接 DSH Go」开关：SSH 前端起来 + 隧道 local_port 改指向 + 关掉还回 22 ──
   // 全程离线：真起一个 ssh2 前端（本机 loopback），官方 API 被 fetch 桩拦下。
-  {
+  // Windows：SSH 前端明确只支持 POSIX（`sh -c` + 插件 SSH 主机能力本身只支持 macOS），
+  // 这 7 条按平台跳过但计入总数 —— 与 density/ssh-front 两颗套件同一手法。
+  if (process.platform === 'win32') {
+    for (const name of [
+      '对接 DSH Go：默认关闭（enabled=false / 前端未监听）',
+      '对接 DSH Go：打开 → 200 且返回前端端口',
+      '对接 DSH Go：打开后把 SSH 隧道 local_port 指到前端端口',
+      '对接 DSH Go：/ssh/state 显示 enabled + running + port',
+      '对接 DSH Go：关闭 → 200 且前端已停',
+      '对接 DSH Go：关闭后把 SSH 隧道 local_port 还给 22（纯 SSH 主机）',
+      '对接 DSH Go：关闭后 /ssh/state 回到 running=false',
+    ]) rec(name, true, 'SKIP · Windows 无 SSH 前端（仅 macOS/Linux）')
+  } else {
     const kpDG = generateHostKey()
     const dataDir = join(home, 'dsh-ssh-host')
     mkdirSync(dataDir, { recursive: true })
