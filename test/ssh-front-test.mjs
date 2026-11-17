@@ -14,7 +14,7 @@ import { createServer } from 'node:net'
 import { generateHostKey } from '../ssh.mjs'
 import {
   parseEd25519PublicKeyLine, rawEd25519FromKeyData, sameEd25519Key,
-  buildAttachLine, wantsDesktop, buildShimScript, startSshFront,
+  buildAttachLine, wantsDesktop, buildShimScript, withShimPath, startSshFront,
 } from '../ssh-front.mjs'
 
 const results = []
@@ -58,6 +58,7 @@ const skip = (n, why) => { results.push(true); console.log(`SKIP  ${n} — ${why
 
   rec('wantsDesktop：认出 dsh desktop / --profile desktop（含嵌在脚本里的形态）',
     wantsDesktop('dsh desktop --host 127.0.0.1 --port 0 --no-open')
+    && wantsDesktop("sh -lc 'dsh desktop --host 127.0.0.1 --port 0 --no-open'")
     && wantsDesktop("sh -lc 'nohup dsh desktop --host 127.0.0.1 --port 0 --no-open'")
     && wantsDesktop('dsh --profile desktop --host 127.0.0.1'))
   rec('wantsDesktop：不误判 dsh web / dsh-desktop / xdsh desktop',
@@ -65,10 +66,23 @@ const skip = (n, why) => { results.push(true); console.log(`SKIP  ${n} — ${why
     && !wantsDesktop('dsh-desktop')
     && !wantsDesktop('xdsh desktop'))
 
+  // 真机回归（2026-11-17）：DSH Go 用 `sh -lc` 跑启动脚本，login shell 会读 /etc/profile
+  // 把进程环境里的 PATH 整个重建，只在 spawn env 里 prepend 无效 —— `dsh desktop` 于是
+  // 落到真 dsh，报 `profile "desktop" is managed exclusively by the Electron application`。
+  // 修复：把 export PATH 塞进 `-c` 的脚本体（profile 之后执行）。
+  const wrapped = withShimPath("sh -lc 'dsh desktop --host 127.0.0.1 --port 0 --no-open'", '/shim/dir')
+  rec('withShimPath：PATH 导出写进 `sh -lc` 的脚本体（profile 之后才生效）',
+    /^sh -lc 'PATH="\/shim\/dir:\$PATH"; export PATH; dsh desktop/.test(wrapped), wrapped)
+  rec('withShimPath：非 `sh -lc` 形态前置导出，且带引号的目录被转义（不破坏 DSH Go 的引号）',
+    withShimPath('dsh desktop --host 127.0.0.1', '/shim/dir')
+      === 'PATH="/shim/dir:$PATH"; export PATH; dsh desktop --host 127.0.0.1'
+    && withShimPath("sh -lc 'x'", '/it"s').includes('PATH="/it\\"s:$PATH"'))
+
   const shim = buildShimScript('/usr/local/bin/dsh')
-  rec('buildShimScript：命中 desktop 时打印启动行并保活，其余原样 exec 真 dsh',
+  rec('buildShimScript：命中 desktop 时打印启动行后退出（不保活，避免拿旧端口重连），其余原样 exec 真 dsh',
     shim.includes('desktop) attach=1') && shim.includes('printf \'%s\\n\' "$DSH_ATTACH_LINE"')
-    && shim.includes('exec sleep 86400') && shim.includes("exec '/usr/local/bin/dsh' \"$@\""))
+    && shim.includes('exit 0') && !shim.includes('sleep 86400')
+    && shim.includes("exec '/usr/local/bin/dsh' \"$@\""))
 }
 
 // ── 2) 服务端行为（本机 loopback，真 ssh2 握手）──
@@ -87,6 +101,12 @@ if (process.platform === 'win32') {
   ]) skip(name, 'Windows 无 /bin/sh，SSH 前端仅支持 macOS/Linux')
 } else {
 {
+  // 登录 shell 会 source 用户的 profile（本机有 rvm/brew，慢且会真跑 ps）。这里把 HOME 指到
+  // 临时目录：/etc/profile 的 path_helper 照样会重建 PATH（正是我们要复现的机制），但不加载
+  // 用户的私有初始化，套件从 3 分钟降到秒级。
+  const realHome = process.env.HOME
+  process.env.HOME = mkdtempSync(join(tmpdir(), 'dsh-ssh-front-home-'))
+  try {
   const ssh2 = await import('ssh2')
   const Client = ssh2.Client ?? ssh2.default?.Client
   const kp = generateHostKey()
@@ -145,7 +165,7 @@ if (process.platform === 'win32') {
 
   // 2c) DSH Go 的托管启动脚本形态：`dsh desktop …` 落到 PATH 垫片 → 打印启动行
   const attachOut = await new Promise((resolve) => {
-    client.exec('dsh desktop --host 127.0.0.1 --port 0 --no-open', (err, stream) => {
+    client.exec("sh -lc 'dsh desktop --host 127.0.0.1 --port 0 --no-open'", (err, stream) => {
       if (err) return resolve(`ERR ${err.message}`)
       let out = ''
       stream.on('data', (d) => { out += d; if (out.includes('token=')) { stream.close(); resolve(out) } })
@@ -154,7 +174,7 @@ if (process.platform === 'win32') {
       setTimeout(() => { stream.close(); resolve(out) }, 3000)
     })
   })
-  rec('ssh-front：`dsh desktop` 经垫片打印启动行（DSH Go 能抓到的形态）',
+  rec('ssh-front：登录 shell 包一层的 `dsh desktop`（DSH Go 的真实形态）经垫片打印启动行',
     attachOut.includes('dsh web: http://127.0.0.1:') && attachOut.includes('token=TK-test'),
     JSON.stringify(attachOut))
   rec('ssh-front：收到 desktop 启动请求时回调 onAttach（红绿灯依据）',
@@ -192,9 +212,14 @@ if (process.platform === 'win32') {
   await front.close()
   await new Promise((r) => echoSrv.close(r))
   await new Promise((r) => otherSrv.close(r))
+  } finally {
+    process.env.HOME = realHome
+  }
 }
 }
 
 const passed = results.filter(Boolean).length
 console.log(`\n${passed}/${results.length} passed`)
-process.exitCode = passed === results.length ? 0 : 1
+// 前端连接与 ssh2 句柄可能留住事件循环，显式收尾 —— 否则套件打印完
+// 「21/21 passed」后进程不退出，test-all.mjs 只会等到超时。
+process.exit(passed === results.length ? 0 : 1)

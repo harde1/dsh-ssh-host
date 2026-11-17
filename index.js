@@ -13,6 +13,7 @@ import { createServer } from 'node:http'
 import { readFileSync, mkdirSync, writeFileSync, rmSync, existsSync, rmdirSync, statSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { randomUUID } from 'node:crypto'
 import { userInfo as osUserInfo, homedir, release as osRelease } from 'node:os'
 
 import { createClient, ApiError } from './natfrp.mjs'
@@ -204,6 +205,9 @@ export function apply(ctx, config = {}) {
   // 在这条隧道上连不进来，交互终端请走原来的 22 直连 —— 关闭开关就回到纯 SSH 主机）。
   let dshGoEnabled = state.dshGo === true
   let sshFront = null          // 运行中的 SSH 前端 {port, close}
+  let attachBridge = null      // 「dsh web 外壳」：DSH Go 以为在连 dsh web，实际是我们的门 → 桌面版
+  let attachBridgePort = null  // 外壳端口（= DSH Go 启动链接里的端口）
+  let attachTicket = ''        // 外壳的一次性口令（DSH Go 用 ?token= 来换 cookie）
   let sshFrontPort = null      // 前端监听端口 = 隧道 local_port（开启时）
   let dshGoAttachedAt = 0      // 最近一次收到 desktop 启动请求的时间
   let dshGoAttachCount = 0
@@ -530,11 +534,64 @@ export function apply(ctx, config = {}) {
     }
   }
 
-  /** DSH Go 要抓的启动行（`dsh web: http://127.0.0.1:<port>/?token=…`）；缺 token 返回 ''。 */
+  /**
+   * DSH Go 要抓的启动行 —— 但端口指向**我们的外壳**，不是桌面版本身。
+   *
+   * 这样才和 `dsh web` 的首访形态一致：DSH Go 拿 `/?token=<票>` 来换 cookie，外壳放行后
+   * 把请求转给桌面版并**注入真正的 launch token**（launchTokenNow）。真 token 不出插件进程，
+   * 手机侧只拿到一张外壳票 —— 这正是 ds-harness-remote 那种「中继」而不是「把钥匙递出去」。
+   */
   function attachLineNow() {
+    if (!attachBridgePort || !attachTicket) return ''
+    return buildAttachLine({ port: attachBridgePort, token: attachTicket })
+  }
+
+  /** 起「dsh web 外壳」（只在「对接 DSH Go」模式里存在）。 */
+  async function startAttachBridge() {
+    if (attachBridge) return attachBridgePort
     const port = dshPortNow()
-    const token = launchTokenNow()
-    return port && token ? buildAttachLine({ port, token }) : ''
+    if (!port || !launchTokenNow()) return null
+    attachTicket = randomUUID().replace(/-/g, '')
+    const door = createPasswordGate({
+      getPassword: () => attachTicket,
+      // 像 dsh web 一样认 `?token=<票>`（DSH Go 只会用这种启动链接换 cookie）
+      acceptTokenParam: true,
+      log: (m) => logInfo(`natfrp: DSH Go 外壳 ${m}`),
+    })
+    const server = createGateServer({
+      port: 0,
+      host: '127.0.0.1',
+      upstream: { host: '127.0.0.1', port: dshPortNow },
+      launchToken: launchTokenNow,
+      onRequest: async (req, res, opts = {}) => {
+        if (opts.upgrade) {
+          if (!door.checkWs(req)) {
+            try {
+              res.write('HTTP/1.1 401 Unauthorized\r\nConnection: close\r\nContent-Length: 0\r\n\r\n')
+              res.destroy()
+            } catch { /* noop */ }
+            return true
+          }
+          return false
+        }
+        return door.handle(req, res)
+      },
+      log: (m) => logInfo(`natfrp: DSH Go 外壳 ${m}`),
+    })
+    const info = await server.listen()
+    attachBridge = server
+    attachBridgePort = info.port
+    logInfo(`natfrp: DSH Go 外壳 127.0.0.1:${attachBridgePort} → 桌面版 :${dshPortNow()}`)
+    return attachBridgePort
+  }
+
+  async function stopAttachBridge() {
+    const had = Boolean(attachBridge)
+    try { await attachBridge?.close?.() } catch { /* noop */ }
+    attachBridge = null
+    attachBridgePort = null
+    attachTicket = ''
+    return had
   }
 
   /** 真 dsh 的位置：垫片的透传目标。找不到就交给 PATH（相当于原样行为）。 */
@@ -573,6 +630,14 @@ export function apply(ctx, config = {}) {
   async function startDshGo() {
     if (sshFront) return { ok: true, port: sshFrontPort, already: true }
     if (!sshTunnelId) return { ok: false, error: 'no-ssh-tunnel' }
+    // 先把「dsh web 外壳」立起来，启动行才拿得到端口与票
+    let bridgePort = null
+    try {
+      bridgePort = await startAttachBridge()
+    } catch (e) {
+      logWarn(`natfrp: DSH Go 外壳启动失败: ${e?.message ?? e}`)
+    }
+    if (!bridgePort) return { ok: false, error: 'no-launch-token' }
     const attachLine = attachLineNow()
     if (!attachLine) return { ok: false, error: 'no-launch-token' }
     let keyLine = ''
@@ -585,7 +650,8 @@ export function apply(ctx, config = {}) {
         publicKeyLine: keyLine.trim(),
         attachLine,
         shimDir: ensureShim(),
-        desktopPort: dshPortNow(),
+        // direct-tcpip 只放行到外壳（DSH Go 会把 127.0.0.1:<端口> 转发到手机侧）
+        desktopPort: bridgePort,
         onAttach: () => { dshGoAttachedAt = Date.now(); dshGoAttachCount += 1 },
         log: (m) => logInfo(`natfrp: ${m}`),
       })
@@ -597,6 +663,7 @@ export function apply(ctx, config = {}) {
       try { await sshFront?.close?.() } catch { /* noop */ }
       sshFront = null
       sshFrontPort = null
+      await stopAttachBridge()
       return { ok: false, error: String(e?.message ?? e) }
     }
   }
@@ -607,6 +674,7 @@ export function apply(ctx, config = {}) {
     try { await sshFront?.close?.() } catch { /* noop */ }
     sshFront = null
     sshFrontPort = null
+    await stopAttachBridge()
     const rep = await repointSshTunnel(SSHD_PORT)
     return { ok: !had || rep.ok !== false, closed: had, ...(rep.ok === false ? { error: rep.error } : {}) }
   }
@@ -2304,6 +2372,7 @@ export function apply(ctx, config = {}) {
     try { await sshFront?.close?.() } catch { /* noop */ }
     sshFront = null
     sshFrontPort = null
+    await stopAttachBridge().catch(() => {})
     logInfo('natfrp: 已停止')
   }, 'natfrp: frpc + gate + ssh-front')
 

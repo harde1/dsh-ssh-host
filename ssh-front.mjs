@@ -74,8 +74,32 @@ export function buildAttachLine({ port, token }) {
  */
 export function wantsDesktop(command) {
   const s = String(command ?? '')
-  return /(?:^|[\s;|&(])dsh\s+desktop(?:\s|$)/.test(s)
-    || /(?:^|[\s;|&(])dsh\s+--profile\s+desktop(?:\s|$)/.test(s)
+  // 前一个字符只要是「非标识符字符」就算：真机上 DSH Go 的脚本是 `sh -lc 'dsh desktop …'`，
+  // `dsh` 前面紧跟的是单引号 —— 字符类里漏掉引号就会静默漏判（2026-11-17 真机就是这么漏的）。
+  // 这里判宽一点无害：真正的拦截仍由垫片自己做，这里只决定是否注入启动行与点灯。
+  return /(?:^|[^\w-])dsh\s+(?:--profile\s+)?desktop(?:\s|$)/.test(s)
+}
+
+/**
+ * 把垫片目录塞进命令的 PATH —— 必须塞在 **登录 shell 的 `-c` 脚本体里面**。
+ *
+ * 真机反馈（2026-11-17）：DSH Go 用 `sh -lc '<脚本>'` 执行启动脚本，而 login shell 会读
+ * /etc/profile → path_helper，把我们注入进程环境的 PATH **整个重建**（实测传入的自定义
+ * 前缀被丢掉，见 `PATH=/tmp/x:$PATH /bin/sh -lc 'echo $PATH'`）。所以只在 spawn 的 env 里
+ * prepend 是无效的，`dsh` 仍然解析到 /usr/local/bin/dsh，报
+ * `profile "desktop" is managed exclusively by the Electron application`。
+ *
+ * 正确做法：把 `export PATH` 塞进 `-c` 的脚本体，它在 profile 之后才执行，于是脚本里的
+ * `dsh` 才落到垫片上。前缀只用双引号，避免与 DSH Go 的单引号转义打架。
+ */
+export function withShimPath(command, shimDir) {
+  const s = String(command ?? '')
+  const prefix = `PATH="${String(shimDir).replace(/"/g, '\\"')}:$PATH"; export PATH;`
+  // `sh -lc '<脚本>'`：在开引号之后插入前缀（脚本体在 profile 之后执行）
+  const wrapped = /^sh\s+-lc\s+'([\s\S]*)'\s*$/.exec(s)
+  if (wrapped) return `sh -lc '${prefix} ${wrapped[1]}'`
+  // 其它形态（直接给命令，或不是 sh -lc）：前置到命令本身
+  return `${prefix} ${s}`
 }
 
 /** 垫片内容：只拦 `desktop`，其余原样 exec 真 dsh；命中时打印启动行并保活。 */
@@ -96,8 +120,10 @@ export function buildShimScript(realDshPath) {
     '    exit 1',
     '  fi',
     '  printf \'%s\\n\' "$DSH_ATTACH_LINE"',
-    '  # 保活：DSH Go 会记录本进程 pid 并在下次连接时复用（kill -0 判活）。',
-    '  exec sleep 86400',
+    '  # 打印完就退出：DSH Go 的探测发现 pid 已死就会重新拉起，从而每次拿到**当前**的',
+    '  # 外壳端口与票。刻意不保活 —— 插件重启会换端口和票，保活只会让客户端拿着旧链接',
+    '  # 反复重连到一个已经不存在的端口。',
+    '  exit 0',
     'fi',
     `exec '${real}' "$@"`,
     '',
@@ -141,7 +167,13 @@ export async function startSshFront({
   // 它只服务这一条隧道的会话。复用 ssh.mjs 的编码器，避免依赖 ssh2 对 PEM 的支持范围。
   const hostKey = generateHostKey()
 
+  // 记下每条连接：close() 时要主动断开，否则 server.close() 会一直等现有连接结束
+  // （测试里最典型：垫片 `exec sleep 86400` 保活，连接不断，close() 永不 resolve）。
+  const connections = new Set()
+
   const server = new Server({ hostKeys: [hostKey.privateKey] }, (client) => {
+    connections.add(client)
+    client.on('close', () => connections.delete(client))
     client.on('authentication', (ctx) => {
       if (ctx.method !== 'publickey') return ctx.reject(['publickey'])
       if (!sameEd25519Key(ctx.key, rawPublicKey)) return ctx.reject(['publickey'])
@@ -190,8 +222,9 @@ export async function startSshFront({
           if (attach) onAttach({ command })
           const env = { ...process.env, PATH: `${shimDir}:${process.env.PATH ?? ''}` }
           if (attach) env.DSH_ATTACH_LINE = attachLine
-          // 垫片只在这个会话的 PATH 里生效：DSH Go 的启动脚本原样跑，里面的 `dsh` 落到垫片。
-          const child = spawn('/bin/sh', ['-c', command], { env, stdio: ['pipe', 'pipe', 'pipe'] })
+          // 垫片要生效，PATH 必须写进 `sh -lc` 的脚本体里（登录 shell 会重建 PATH，见 withShimPath）。
+          const runCommand = withShimPath(command, shimDir)
+          const child = spawn('/bin/sh', ['-c', runCommand], { env, stdio: ['pipe', 'pipe', 'pipe'] })
           child.stdout.on('data', (d) => stream.write(d))
           child.stderr.on('data', (d) => stream.stderr.write(d))
           stream.on('data', (d) => child.stdin.write(d))
@@ -225,6 +258,11 @@ export async function startSshFront({
   return {
     port: boundPort,
     close: () => new Promise((resolve) => {
+      for (const c of connections) {
+        try { c.end() } catch { /* noop */ }
+        try { setTimeout(() => c.destroy?.(), 50) } catch { /* noop */ }
+      }
+      connections.clear()
       try { server.close(() => resolve()) } catch { resolve() }
     }),
   }

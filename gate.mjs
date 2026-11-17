@@ -239,7 +239,14 @@ code{background:#10131b;border:1px solid #2c3345;border-radius:5px;padding:1px 6
  * 密码门。返回 {handle(req,res)}：true = 已接管。
  * cookie 为 HMAC(密码, 进程随机钥)——改密码或进程重启即失效。
  */
-export function createPasswordGate({ getPassword, maxFailures = 5, lockMs = 60_000, log = () => {} } = {}) {
+/**
+ * @param {object} [opts]
+ * @param {boolean} [opts.acceptTokenParam] 除 `?gate=` 外是否也认 `?token=` 当密码。
+ *   只给「对接 DSH Go」的外壳用：它必须长得像 `dsh web` —— DSH Go 只会用
+ *   `http://127.0.0.1:<port>/?token=<票>` 这种启动链接换 cookie（dsh web 自己的首访形态），
+ *   认 `?gate=` 它根本不会来。主网关保持 false，行为一个字节都不变。
+ */
+export function createPasswordGate({ getPassword, maxFailures = 5, lockMs = 60_000, acceptTokenParam = false, log = () => {} } = {}) {
   const COOKIE = 'sshhost_gate'
   const MAX_AGE = 60 * 60 * 24 * 30
   const sessionKey = randomBytes(16).toString('hex')
@@ -361,9 +368,11 @@ export function createPasswordGate({ getPassword, maxFailures = 5, lockMs = 60_0
     // 2) 有效 cookie
     if (cookies[COOKIE] && safeEqual(cookies[COOKIE], expected)) return false
 
-    // 3) ?gate=<password> 直达（同样计失败）
+    // 3) ?gate=<password> 直达（同样计失败）；外壳模式下也认 ?token=<password>
     const url = new URL(req.url ?? '/', 'http://127.0.0.1')
-    const qp = url.searchParams.get('gate')
+    const gateParam = url.searchParams.get('gate')
+    const tokenParam = acceptTokenParam ? url.searchParams.get('token') : null
+    const qp = gateParam ?? tokenParam
     if (qp) {
       if (lock.locked) {
         res.writeHead(429, { 'content-type': 'text/html; charset=utf-8', 'referrer-policy': 'no-referrer' })
@@ -373,11 +382,13 @@ export function createPasswordGate({ getPassword, maxFailures = 5, lockMs = 60_0
       if (safeEqual(qp, password)) {
         failures.delete(ip)
         url.searchParams.delete('gate')
+        url.searchParams.delete('token')
         grant(res, expected, `${url.pathname}${url.search}` || '/')
       } else {
         recordFailure(ip)
         // 重渲染的登录页带上「去掉 gate 参数」的目标地址，登录成功后仍回到原页
         url.searchParams.delete('gate')
+        url.searchParams.delete('token')
         res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'referrer-policy': 'no-referrer' })
         res.end(loginPageHtml({ failed: true, next: safeNext(`${url.pathname}${url.search}`) }))
         log(`gate: ?gate= 密码错误 ${ip}`)
