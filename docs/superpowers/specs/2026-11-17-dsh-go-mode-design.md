@@ -41,6 +41,21 @@ DSH Go 的 `DshClient.login()`（dsh-go `packages/dsh_client/lib/src/connection.
 一旦外壳自己回 302/303（密码门那套就是这么干的），客户端拿不到 dsh-auth 就判死。
 真机第二次报错正是这个原因，已按此改。
 
+### 验证（2026-11-17，对本机真实 `dsh web`）
+
+用 `DSH_HOME=<临时目录> dsh web --host 127.0.0.1 --port 0 --no-open` 起一个真的 DSH web
+（它会打印 `dsh web: http://127.0.0.1:<port>/?token=<真 token>`），再把外壳（gate + 本文件
+描述的 rewrite）挡在它前面，按 DSH Go 的握手顺序跑了一遍：
+
+| 请求 | 期望 | 实测 |
+| --- | --- | --- |
+| `GET /?token=<外壳票>`（不跟随重定向） | 303 + `set-cookie: dsh-auth-…` | 303，`location: ./`，cookie 存在 |
+| `GET /` + 该 cookie | 200 + HTML | 200 + HTML |
+| `GET /?token=<错票>` | 401 | 401 |
+
+这就是 `connection.dart:312-336` 那四步的原样复刻，只是把「桌面上真正跑的那个 dsh web」
+换成了桌面版本身。
+
 ### 「dsh web 外壳」而不是直接把钥匙递出去
 
 外壳就是一个 `createGateServer` 实例：DSH Go 拿 `/?token=<票>` 来换 cookie（这正是 `dsh web`
@@ -73,6 +88,8 @@ DSH Go 的 `DshClient.login()`（dsh-go `packages/dsh_client/lib/src/connection.
 - 桌面版 launch token 经 `DSH_ATTACH_LINE` 环境变量传进会话，不写文件、不进 state.json；
   手机侧只拿外壳票，真 token 只在插件进程与转发请求里存在。
 - 垫片打印完启动行即退出（不保活）：保活会让客户端在插件重启后拿着已失效的旧端口/票反复重连。
+- WS 升级请求在没有会话 cookie 时也转发给桌面版（由桌面版自己 401）：外壳从不替它授权，
+  少一道自己掐断的可能失败点；票据错仍然直接拒绝。
 
 ## 接口
 

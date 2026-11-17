@@ -571,11 +571,17 @@ export function apply(ctx, config = {}) {
         )
         if (verdict.action === 'deny') {
           if (opts.upgrade) {
-            try {
-              res.write('HTTP/1.1 401 Unauthorized\r\nConnection: close\r\nContent-Length: 0\r\n\r\n')
-              res.destroy()
-            } catch { /* noop */ }
-            return true
+            // WS 放行给桌面版自己判：外壳从不替它授权，转发一个没有会话的升级请求不会多给
+            // 任何权限（桌面版照样 401），但能避免「客户端建 WS 时不带 cookie」被我们提前掐掉。
+            // 票据错仍然是明确误用，直接掐。
+            if (verdict.reason === 'bad-ticket') {
+              try {
+                res.write('HTTP/1.1 401 Unauthorized\r\nConnection: close\r\nContent-Length: 0\r\n\r\n')
+                res.destroy()
+              } catch { /* noop */ }
+              return true
+            }
+            return false
           }
           res.writeHead(401, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' })
           res.end(`dsh-ssh-host: attach denied (${verdict.reason ?? 'no-session'})`)
