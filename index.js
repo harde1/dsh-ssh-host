@@ -163,6 +163,16 @@ export function apply(ctx, config = {}) {
     tokenFile: String(config.tokenFile || '').trim(),
     tokenRef: String(config.tokenRef || 'NATFRP_TOKEN'),
     maxLogLines: Number(config.maxLogLines) || 500,
+    /**
+     * 面板**读**路由打上游 API 的上限（毫秒）。
+     *
+     * 为什么必须比前端短：面板的 GET 超时是 8s（client.js 的 GET_TIMEOUT_MS），
+     * 上游默认 12s（natfrp.mjs:27）。后端若照 12s 挂着，前端已经放弃，
+     * 这条上游连接却还被白占着 —— 桌面宿主是单浏览器上下文、同源 HTTP/1.1
+     * 只有 6 条连接，占的就是别人的额度。
+     * 链路慢的用户可以调大，但不给 0 以下（0/负数回落到默认）。
+     */
+    readTimeoutMs: Number(config.readTimeoutMs) > 0 ? Number(config.readTimeoutMs) : 6000,
     autoAlign: config.autoAlign !== false,
     dshPort: Number(config.dshPort) || 0,
     /**
@@ -433,8 +443,8 @@ export function apply(ctx, config = {}) {
     })
   }
 
-  /** 面板轮询的读路由统一用它：6s 内必须有结论，早于前端 8s 放弃。 */
-  const READ_TIMEOUT_MS = 6000
+  /** 面板轮询的读路由统一用它：默认 6s 内必须有结论，早于前端 8s 放弃。 */
+  const READ_TIMEOUT_MS = cfg.readTimeoutMs
 
   /**
    * 记一次「API 确实通了」，把上一次的失败抹掉。

@@ -83,7 +83,7 @@ window.__ModuleLoader__.load({
     function rethrowTimeout(e, ms, path) {
       const name = String(e?.name ?? '')
       if (name === 'AbortError' || e?.name === 'TimeoutError') {
-        const err = new Error(`请求超时（${Math.round(ms / 1000)}s）：${path}`)
+        const err = new Error(`请求超时（${ms < 1000 ? `${ms}ms` : `${Math.round(ms / 1000)}s`}）：${path}`)
         err.timedOut = true
         throw err
       }
