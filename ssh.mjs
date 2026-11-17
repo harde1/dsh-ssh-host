@@ -244,3 +244,59 @@ export async function checkSshd(host = '127.0.0.1', port = SSHD_PORT, timeoutMs 
     socket.once('error', () => finish(false))
   })
 }
+
+// ── SSH 会话观测(只读) ─────────────────────────────────────────────────────
+//
+// 插件不在 SSH 明文路径上:建隧道时 local_port 写死 SSHD_PORT 直通 sshd,插件既不是
+// 服务端也不在中间,拿不到「这条会话执行了什么命令」。能观测到的只有内核套接字表里
+// 22 端口上的 ESTABLISHED 连接数 —— 它只回答「现在有没有 SSH 客户端连着」,不能回答
+// 「是不是 DSH Go」。前端文案与这个边界一致,不把「有人连着」说成「DSH Go 连成功」。
+//
+// 测试经 setSshSessionProberForTests 注入(仓库约定全部离线);生产代码不调用注入点。
+let sshSessionProber = null
+export function setSshSessionProberForTests(fn) { sshSessionProber = fn }
+
+/** 地址里取端口:`127.0.0.1.22`(BSD netstat)与 `127.0.0.1:22`(Linux)都认。 */
+function addressPort(addr) {
+  const s = String(addr ?? '')
+  if (!s || s.startsWith('*')) return null
+  const sep = s.includes(':') ? ':' : '.'
+  const i = s.lastIndexOf(sep)
+  if (i < 0) return null
+  const port = Number(s.slice(i + 1))
+  return Number.isInteger(port) && port > 0 ? port : null
+}
+
+/**
+ * 从 `netstat` 文本里数 [port] 上的 ESTABLISHED 会话。
+ *
+ * 只数**服务端那一行**(本地地址以 [port] 结尾)。一条会话在内核表里有两行
+ * (服务端 + 客户端侧),客户端侧的本地端口是临时端口,不会被计入。
+ * LISTEN / SYN_SENT / TIME_WAIT 等一律不计。
+ */
+export function parseEstablishedSessions(text, port = SSHD_PORT) {
+  let count = 0
+  for (const raw of String(text ?? '').split('\n')) {
+    const m = /^tcp[46]?\s+\d+\s+\d+\s+(\S+)\s+(\S+)\s+ESTABLISHED\b/.exec(raw.trim())
+    if (!m) continue
+    if (addressPort(m[1]) === port) count++
+  }
+  return count
+}
+
+/**
+ * 采样当前 SSH 会话数。**失败不抛**：返回 `{ok:false}` 让调用方降级为「未观测」——
+ * 一次 netstat 失败说明我们看不见，不是 SSH 坏了，不能把灯点成红色。
+ */
+export async function countSshSessions({ port = SSHD_PORT, timeoutMs = 1500, exec = null } = {}) {
+  if (sshSessionProber) return sshSessionProber({ port })
+  const { execFile } = await import('node:child_process')
+  const run = exec ?? execFile
+  const args = process.platform === 'darwin' ? ['-an', '-p', 'tcp'] : ['-an', '-t']
+  return new Promise((resolve) => {
+    run('netstat', args, { timeout: timeoutMs, maxBuffer: 1 << 20 }, (err, stdout) => {
+      if (err) resolve({ ok: false, count: 0 })
+      else resolve({ ok: true, count: parseEstablishedSessions(stdout, port) })
+    })
+  })
+}

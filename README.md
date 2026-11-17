@@ -21,10 +21,10 @@ Host 围栏反代、DSH 二次认证等上游能力原样可用(相关说明见�
 > macOS。请自行审阅源码后再使用;涉及安全敏感场景时请格外谨慎。
 > 代码按 MIT「按原样(AS IS)」提供,不附带任何担保,风险自负。
 >
-> 与「AI 生成即不可靠」无关的部分:**测试是可复核的**。`npm test` 是 26 个套件、950 项
+> 与「AI 生成即不可靠」无关的部分:**测试是可复核的**。`npm test` 是 26 个套件、964 项
 > 全离线的断言(不连 SakuraFrp、不需要访问密钥、不写任何用户目录),其中
 > `admin-auth-test.mjs` 专门覆盖网关鉴权(7 种路径花招、WS 同权、改密后旧 cookie 失效),
-> `ssh-host-test.mjs` 覆盖 SSH 主机能力与路由(123 项,含用系统 `ssh-keygen` 反推公钥来
+> `ssh-host-test.mjs` 覆盖 SSH 主机能力与路由(135 项,含用系统 `ssh-keygen` 反推公钥来
 > 判私钥格式是否合法)。数字与结论都能自己跑一遍验证,不必只信这段说明。
 
 ---
@@ -82,6 +82,12 @@ SSH 中心卡按「还缺什么」只显示当前那一步,你不需要往下找
 就绪态卡上显示连接命令 `ssh <user>@<节点host> -p <远程端口>` 与「复制连接命令」按钮
 (`navigator.clipboard` 不可用时自动退化到 textarea 复制;两条路都不通会直接提示你手动选中——
 面板本身已 `userSelect: all`)。
+
+徽标行末尾还有一盏**会话观测灯**:🟢 `SSH 已连入 N 路` / 灰 `暂无 SSH 会话` /
+琥珀 `会话未观测`。它只数内核套接字表里 22 端口上的 `ESTABLISHED` 连接,
+所以只能回答「现在有没有客户端连着」——**分不出是 Termius 还是 DSH Go**,
+更看不到会话里跑了什么命令(插件不在 SSH 明文路径上,隧道是 `local_port=22` 直通 sshd)。
+`netstat` 采样失败会降级成「未观测」而不是报红:看不见不等于 SSH 坏了。
 
 手机端:Termius → Keychain → + → Import,把卡上「私钥 → 导入手机(Termius)」里整段
 (含 BEGIN/END 行)粘贴保存,主机认证选这把钥匙,连上面那条命令即可。
@@ -179,8 +185,13 @@ GET  /ssh-host/api/ssh/state
      sshTunnelId / tunnel {id,online,remote,nodeHost,node} / user / connectCmd
      (隧道上线后给出 `ssh <user>@<节点host> -p <远程端口>`,否则 null)/
      channel {enabled,running,hasToken}(中心卡的通道开关状态用)
+     / remoteSession {active,count,ok,observedAt}(会话观测红绿灯)
      —— channel 三个值全是本地读:enabled 取自 state,running 取自 frpc 进程快照,
      hasToken 走密钥解析路径,**不额外打官方 API、不做二次 TCP 探测**(这路由前端 8 秒轮一次)
+     —— remoteSession 只数 22 端口上的 ESTABLISHED 连接(netstat,8s TTL 缓存,
+     通道关着时一次都不采样)。它回答「现在有没有 SSH 客户端连着」,**回答不了客户端是谁**:
+     插件不在 SSH 明文路径上(隧道 local_port=22 直通 sshd),所以文案不写「DSH Go 连成功」。
+     ok=false = 采样失败,前端降级为琥珀色「会话未观测」,不报红
 
 POST /ssh-host/api/ssh/key/create
      生成专用 ed25519 密钥对:私钥/公钥落 ~/.dsh/dsh-ssh-host/(0600),
@@ -299,7 +310,7 @@ time curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:<端口>/ssh-host
 也是拿一个临时 `DSH_HOME` 跑冷启动)。
 
 ```bash
-npm test                 # 26 个套件、950 项,串行跑并汇总
+npm test                 # 26 个套件、964 项,串行跑并汇总
 # npm test 会核对 README 的套件表与总数：文档数字一过期,测试直接红
 npm test -- path         # 只跑名字含关键字的套件
 ```
@@ -313,8 +324,8 @@ npm test -- path         # 只跑名字含关键字的套件
 
 | 套件 | 项 | 覆盖 |
 |---|---|---|
-| `ssh-host-test.mjs` | 123 | SSH 主机能力:ed25519 密钥(**用系统 `ssh-keygen -y` 反推公钥来判封装是否合法**)/ authorized_keys upsert / 连接命令 / sshd 探测注入点 / SSH 路由 / 旧 PKCS8 私钥自愈 / 节点三级回退 / 建隧道自动开启通道 / frpc 多隧道(NATFRP_TARGET) |
-| `order-test.mjs` | 123 | 解锁顺序、表单排布、按钮文案与出现条件、SSH 中心卡契约(复制回退 / 深链分支 / 区内不出现口令字样 / **自动生成密钥与自动建隧道的触发条件、只试一次与「重试」出口**)、「高级」区折叠边界(遗留项确实在区内、日志与安装引导确实在区外) |
+| `ssh-host-test.mjs` | 135 | SSH 主机能力:ed25519 密钥(**用系统 `ssh-keygen -y` 反推公钥来判封装是否合法**)/ authorized_keys upsert / 连接命令 / sshd 探测注入点 / SSH 路由 / 旧 PKCS8 私钥自愈 / 节点三级回退 / 建隧道自动开启通道 / frpc 多隧道(NATFRP_TARGET) |
+| `order-test.mjs` | 125 | 解锁顺序、表单排布、按钮文案与出现条件、SSH 中心卡契约(复制回退 / 深链分支 / 区内不出现口令字样 / **自动生成密钥与自动建隧道的触发条件、只试一次与「重试」出口**)、「高级」区折叠边界(遗留项确实在区内、日志与安装引导确实在区外) |
 | `paths-test.mjs` | 51 | frpc / DSH home 路径解析(含 `$DSH_HOME` 空白、`PROFILE_DIR` 反推) |
 | `installer-test.mjs` | 52 | frpc 资产挑选 / 下载 / 版本校验 / 版本号提取与比较 |
 | `progressive-test.mjs` | 57 | 渐进解锁派生状态与提示语 |

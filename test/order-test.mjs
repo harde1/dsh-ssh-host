@@ -237,6 +237,13 @@ rec('SSH hero 卡内零「密码」字样（纯密钥认证）', !/密码/.test(
   `${(heroSrc.match(/密码/g) || []).length} 处`)
 rec('hero 卡把 sshd 未开 / 无密钥 / 无隧道三种阻塞各自说清',
   /远程登录/.test(heroSrc) && /生成|密钥/.test(heroSrc) && /隧道/.test(heroSrc))
+// 会话观测灯：只数 22 端口 ESTABLISHED，回答「有没有 SSH 客户端连着」；
+// 插件不在 SSH 明文路径上（隧道 local_port=22 直通 sshd），看不到命令、分不出客户端，
+// 所以文案绝不能写成「DSH Go 连接成功」——那是我们验证不了的断言。
+rec('hero 卡有会话观测灯（active / 暂无 / 未观测 三态文案）',
+  /SSH 已连入/.test(heroSrc) && /暂无 SSH 会话/.test(heroSrc) && /会话未观测/.test(heroSrc))
+rec('会话观测灯不冒充客户端身份（不出现「DSH Go 连接成功」这类无法验证的断言）',
+  !/DSH Go 连接成功|DSH Go 已连/.test(heroSrc))
 rec('旧版硬编码深链已不再出现在 SSH 区（改由 darwinMajor 判定）',
   !/location\.href = 'x-apple\.systempreferences:com\.apple\.preferences\.sharing\?Services'/.test(client))
 

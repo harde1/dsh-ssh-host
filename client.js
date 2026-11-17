@@ -2649,6 +2649,19 @@ body[data-sshhost-mode="narrow"] button[aria-label="SSH 主机"] > .sshhost-swit
           badge(ssh.sshdUp === true, ssh.sshdUp === true ? '远程登录已开' : '远程登录未开', true),
           badge(channelOn, channelOn ? '通道已开' : '通道未开', true),
           ssh.tunnel ? badge(online, online ? '隧道在线' : '隧道未连', true) : null,
+          // 会话观测（红绿灯）：只数 22 端口上的 ESTABLISHED，能说明「有没有 SSH 客户端连着」，
+          // 说明不了对端是谁 —— 插件不在 SSH 明文路径上（隧道 local_port=22 直通 sshd），
+          // 拿不到命令/客户端标识，所以文案只说「SSH 已连入」，不冒充「DSH Go 连成功」。
+          // 采样失败（netstat 不可用/超时）降级为琥珀色「会话未观测」：看不见 ≠ SSH 坏了。
+          ssh.remoteSession
+            ? badge(
+              ssh.remoteSession.active === true,
+              ssh.remoteSession.active === true
+                ? `SSH 已连入 ${Number(ssh.remoteSession.count) || 1} 路`
+                : ssh.remoteSession.ok === false ? '会话未观测' : '暂无 SSH 会话',
+              true,
+            )
+            : null,
           ssh.key
             ? h('span', { style: S.code, title: '手机端导入私钥后可比对这串指纹' }, ssh.key.fingerprint)
             : null),

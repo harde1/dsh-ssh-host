@@ -28,6 +28,7 @@ import {
   buildOpenSshPublicKey, generateHostKey, fingerprintOf,
   installPublicKey, buildConnectCommand, parseSshdProbeResult,
   checkSshd, setSshdProberForTests, toOpenSshPrivatePem, publicKeyFromPrivatePem,
+  parseEstablishedSessions, countSshSessions, setSshSessionProberForTests,
 } from '../ssh.mjs'
 
 const results = []
@@ -35,6 +36,48 @@ const rec = (n, p, d = '') => { results.push(p); console.log(`${p ? 'PASS' : 'FA
 const markerLines = (text) => text.split('\n').filter((l) => l.includes('dsh-ssh-host')).length
 // 给 ssh-keygen 落盘用的临时目录（只放测试自己生成的私钥，不碰 ~/.ssh）
 const homeForTest = mkdtempSync(join(tmpdir(), 'dsh-ssh-keygen-'))
+
+// ── 0) 会话观测解析（纯函数，全离线）──
+// 插件不在 SSH 明文路径上：解析的只是套接字表里 22 端口的 ESTABLISHED 行，
+// 回答「有没有会话」，回答不了「谁连的/跑了什么命令」。
+{
+  const macSample = [
+    'tcp4       0      0  *.22                   *.*                    LISTEN',
+    'tcp4       0      0  127.0.0.1.22           127.0.0.1.49826        ESTABLISHED',
+    'tcp4       0      0  127.0.0.1.49826        127.0.0.1.22           ESTABLISHED',
+    'tcp4       0      0  192.168.0.90.50000     1.2.3.4.22             ESTABLISHED',
+  ].join('\n')
+  rec('parseEstablishedSessions：macOS 点号地址只数服务端那一行（1 条）',
+    parseEstablishedSessions(macSample) === 1, String(parseEstablishedSessions(macSample)))
+  rec('parseEstablishedSessions：LISTEN / 以本机为客户端的外连都不计',
+    parseEstablishedSessions('tcp4 0 0 *.22 *.* LISTEN') === 0
+    && parseEstablishedSessions('tcp4 0 0 192.168.0.90.50000 1.2.3.4.22 ESTABLISHED') === 0)
+
+  const linuxSample = [
+    'tcp        0      0 127.0.0.1:22            127.0.0.1:51234         ESTABLISHED',
+    'tcp        0      0 127.0.0.1:51234         127.0.0.1:22            ESTABLISHED',
+    'tcp6       0      0 :::22                   :::*                    LISTEN',
+  ].join('\n')
+  rec('parseEstablishedSessions：Linux 冒号地址同样只数一条',
+    parseEstablishedSessions(linuxSample) === 1, String(parseEstablishedSessions(linuxSample)))
+  rec('parseEstablishedSessions：空输入/垃圾输入为 0',
+    parseEstablishedSessions('') === 0 && parseEstablishedSessions('garbage\n\n') === 0)
+  rec('parseEstablishedSessions：非 22 端口不计（参数化端口）',
+    parseEstablishedSessions('tcp4 0 0 127.0.0.1.2222 127.0.0.1.40000 ESTABLISHED', 2222) === 1
+    && parseEstablishedSessions('tcp4 0 0 127.0.0.1.22 127.0.0.1.40000 ESTABLISHED', 2222) === 0)
+
+  // 采样失败不抛：返回 ok:false，调用方据此降级为「未观测」而不是红色故障
+  const bad = await countSshSessions({
+    exec: (_file, _args, _opts, cb) => { cb(new Error('netstat missing'), '') },
+  })
+  rec('countSshSessions：netstat 失败降级为 {ok:false,count:0}（不抛）',
+    bad?.ok === false && bad?.count === 0, JSON.stringify(bad))
+  setSshSessionProberForTests(async () => ({ ok: true, count: 7 }))
+  const injected = await countSshSessions()
+  rec('countSshSessions：注入点生效（测试不真跑 netstat）',
+    injected?.ok === true && injected?.count === 7, JSON.stringify(injected))
+  setSshSessionProberForTests(null)
+}
 
 // ── 1) generateHostKey：OpenSSH ed25519 公钥行 + OpenSSH authkey 私钥 ──
 // 私钥格式是真机反馈逼出来的:Termius 对 ed25519 只认
@@ -369,6 +412,79 @@ rec('ETIMEDOUT → 未就绪', parseSshdProbeResult('ETIMEDOUT') === false)
           !existsSync(f4.targetFile) && s4.body?.frpc?.running === false,
           `targetExists=${existsSync(f4.targetFile)} running=${s4.body?.frpc?.running}`)
         await srv4.close()
+      })
+  }
+
+  // ── 会话观测（红绿灯）路由级：/ssh/state.remoteSession ──
+  // 三种情形各自独立 apply（缓存是模块级 8s TTL，同一进程里混着测会互相污染）：
+  //   ① 通道开着 + 采样成功 → active/count 透传，且 TTL 内复用缓存（不每请求起子进程）
+  //   ② 通道开着 + 采样失败 → ok:false 降级「未观测」，不是红色故障
+  //   ③ 通道关着 → 一次都不采样（observedAt=0）
+  {
+    const GPa = await freePort()
+    const fa = fakeFrpc()
+    await withApply({ enabled: true, tunnelId: '111', gatePort: GPa },
+      { enabled: true, tunnelId: '111', gatePort: GPa, frpcPath: fa.path, autoAlign: false },
+      async (box) => {
+        const srv = await serve(box)
+        setSshSessionProberForTests(async () => ({ ok: true, count: 2 }))
+        // 等 frpc 真被拉起：通道 running 才采样
+        for (let i = 0; i < 60; i++) {
+          const s = await getJSON(srv.base, '/ssh-host/api/state')
+          if (s.body?.frpc?.running === true) break
+          await new Promise((r) => setTimeout(r, 50))
+        }
+        let st = await getJSON(srv.base, '/ssh-host/api/ssh/state')
+        const rs1 = st.body?.remoteSession
+        rec('会话观测：通道开着 + 采样 2 条 → active=true/count=2/ok=true',
+          rs1?.active === true && rs1?.count === 2 && rs1?.ok === true, JSON.stringify(rs1))
+        rec('会话观测：observedAt 是本次采样时间戳（>0）',
+          Number(rs1?.observedAt) > 0, String(rs1?.observedAt))
+
+        // TTL 内复用：把探针换成 9 条，立即再取一次 —— 仍是缓存里的 2
+        setSshSessionProberForTests(async () => ({ ok: true, count: 9 }))
+        const st2 = await getJSON(srv.base, '/ssh-host/api/ssh/state')
+        rec('会话观测：8s TTL 内复用缓存（不每请求重采）',
+          st2.body?.remoteSession?.count === 2, JSON.stringify(st2.body?.remoteSession))
+        await srv.close()
+        setSshSessionProberForTests(null)
+      })
+
+    const GPb = await freePort()
+    const fb = fakeFrpc()
+    await withApply({ enabled: true, tunnelId: '111', gatePort: GPb },
+      { enabled: true, tunnelId: '111', gatePort: GPb, frpcPath: fb.path, autoAlign: false },
+      async (box) => {
+        const srv = await serve(box)
+        setSshSessionProberForTests(async () => ({ ok: false, count: 0 }))
+        for (let i = 0; i < 60; i++) {
+          const s = await getJSON(srv.base, '/ssh-host/api/state')
+          if (s.body?.frpc?.running === true) break
+          await new Promise((r) => setTimeout(r, 50))
+        }
+        const st = await getJSON(srv.base, '/ssh-host/api/ssh/state')
+        const rs = st.body?.remoteSession
+        rec('会话观测：采样失败 → ok=false 且 active=false（降级为未观测，不报红）',
+          rs?.ok === false && rs?.active === false && rs?.count === 0, JSON.stringify(rs))
+        await srv.close()
+        setSshSessionProberForTests(null)
+      })
+
+    const GPc = await freePort()
+    const fc = fakeFrpc()
+    await withApply({ enabled: false, tunnelId: '111', gatePort: GPc },
+      { enabled: false, tunnelId: '111', gatePort: GPc, frpcPath: fc.path, autoAlign: false },
+      async (box) => {
+        const srv = await serve(box)
+        let calls = 0
+        setSshSessionProberForTests(async () => { calls++; return { ok: true, count: 3 } })
+        const st = await getJSON(srv.base, '/ssh-host/api/ssh/state')
+        const rs = st.body?.remoteSession
+        rec('会话观测：通道关着 → 不采样（observedAt=0，探针零调用）',
+          rs?.observedAt === 0 && rs?.count === 0 && rs?.ok === false && calls === 0,
+          `rs=${JSON.stringify(rs)} calls=${calls}`)
+        await srv.close()
+        setSshSessionProberForTests(null)
       })
   }
 

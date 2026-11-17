@@ -20,7 +20,7 @@ import { createFrpcManager } from './frpc.mjs'
 import { createPasswordGate, createGateServer } from './gate.mjs'
 import { installFrpc, checkInstalled, fetchClients, pickAsset, extractSakuraVersion, compareFrpcVersion } from './installer.mjs'
 import { resolveDshHome, resolveFrpcPath, displayPath } from './paths.mjs'
-import { checkSshd, generateHostKey, fingerprintOf as sshFingerprintOf, installPublicKey, buildConnectCommand, SSHD_PORT, toOpenSshPrivatePem, publicKeyFromPrivatePem } from './ssh.mjs'
+import { checkSshd, countSshSessions, generateHostKey, fingerprintOf as sshFingerprintOf, installPublicKey, buildConnectCommand, SSHD_PORT, toOpenSshPrivatePem, publicKeyFromPrivatePem } from './ssh.mjs'
 
 export const name = 'sshhost'
 export const inject = ['credentials', 'webServer', 'timer', 'connection']
@@ -218,6 +218,15 @@ export function apply(ctx, config = {}) {
   // 这里就地换成 OpenSSH authkey 封装 —— 同一把密钥,公钥不变,
   // authorized_keys 里的条目不用动,手机端只需重新导出一次。
   let hostKey = null
+  /**
+   * SSH 会话观测缓存。
+   *
+   * 面板 8s 轮一次 /ssh/state，采样 TTL 也是 8s —— 每轮最多一个 `netstat` 子进程；
+   * 通道关着时一次都不跑（那时不可能有会话）。放模块级而不是每次请求新建，
+   * 是为了让「连续两次轮询之间不重复采样」成立。
+   */
+  const SSH_SESSION_TTL_MS = 8000
+  let sshSessionCache = { at: 0, value: { ok: true, count: 0 } }
   try {
     const pk = safeRead(join(DATA_DIR, 'ssh-host-key'))
     if (pk) {
@@ -1649,6 +1658,26 @@ export function apply(ctx, config = {}) {
       // 都是本地读取(内存变量 + 凭据库 resolve),不新增网络往返与 TCP 探测。
       const tokenForState = await resolveToken()
       const frpcSnap = frpc.snapshot()
+      // SSH 会话观测（只读）：只数 22 端口上的 ESTABLISHED，回答「现在有没有客户端连着」。
+      // 通道没开 / frpc 没跑时一次都不采样（那种状态不可能有会话，没必要起子进程）；
+      // 采样失败降级成「未观测」（ok:false），绝不报成红色故障 —— 看不见不等于坏了。
+      let remoteSession = { active: false, count: 0, ok: false, observedAt: 0 }
+      if (enabled && frpcSnap?.running) {
+        const now = Date.now()
+        if (now - sshSessionCache.at >= SSH_SESSION_TTL_MS) {
+          sshSessionCache = {
+            at: now,
+            value: await countSshSessions().catch(() => ({ ok: false, count: 0 })),
+          }
+        }
+        const sample = sshSessionCache.value
+        remoteSession = {
+          active: sample.count > 0,
+          count: sample.count,
+          ok: sample.ok,
+          observedAt: sshSessionCache.at,
+        }
+      }
       json(res, 200, {
         platform: process.platform,
         // macOS 内核主版本(Darwin 22 = macOS 13 Ventura 起「系统设置」换新架构),
@@ -1669,6 +1698,9 @@ export function apply(ctx, config = {}) {
         connectCmd: tunnel?.remote && tunnel?.nodeHost
           ? buildConnectCommand(user, tunnel.nodeHost, tunnel.remote)
           : null,
+        // 会话观测结果（前端红绿灯用）：active 只说明「22 端口上有 ESTABLISHED 会话」，
+        // 不代表对端是哪个客户端 —— 插件看不到 SSH 明文，别在前端把它说成「DSH Go 已连上」。
+        remoteSession,
       })
       return true
     }
