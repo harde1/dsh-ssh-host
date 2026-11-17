@@ -303,9 +303,14 @@ rec('高级区默认收起（readAdvOpenPref 没存过时返回 false）',
 rec('折叠选择落盘（与日志偏好同一套 localStorage 手法）',
   /writeAdvOpenPref\(next\)/.test(client) && /dsh-ssh-host\.advOpen/.test(client))
 // ① 访问密钥已随「少填写少操作」移除（hero 是唯一入口）——不再检查它。
+// 分工（真机反馈后重排）：必填/前提的信息（frpc 版本）**不进**折叠区，可选配置才收进去。
+rec('frpc 版本条在折叠头之前（必填/前提信息默认可见，收起也能看到）',
+  client.indexOf('h(FrpcVersionBar') > 0 && client.indexOf('h(FrpcVersionBar') < advHeader,
+  `bar=${client.indexOf('h(FrpcVersionBar')} advHeader=${advHeader}`)
+rec('折叠区只讲 DSH 网页入口（可选）',
+  /高级 · DSH 网页入口（可选/.test(client))
 for (const [name, needle] of [['② 隧道', "// ── ② 隧道 ──"],
-  ['③ 本机端口', '③ 本机端口：选了隧道才出现'], ['④ 访问密码', "'④ 访问密码'"], ['保存按钮', "busy ? '保存中…' : '保存'"],
-  ['frpc 版本条', 'h(FrpcVersionBar']]) {
+  ['③ 本机端口', '③ 本机端口：选了隧道才出现'], ['④ 访问密码', "'④ 访问密码'"], ['保存按钮', "busy ? '保存中…' : '保存'"]]) {
   const at = client.indexOf(needle)
   rec(`${name} 收在高级区内（折叠头之后、日志之前）`,
     at > advHeader && at < logsAnchorAbs, `at=${at} advHeader=${advHeader} logs=${logsAnchorAbs}`)

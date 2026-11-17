@@ -1630,7 +1630,16 @@ window.__ModuleLoader__.load({
         // ── frpc 缺失时的安装引导（置顶，最显眼）──
         h(FrpcInstallCard, { inst: st.frpcInstall, onDone: () => void loadState({ force: true }) }),
 
-        // ── 高级（默认收起）：遗留的 DSH 隧道配置整段搬到这里，功能项一个不少 ──
+        // frpc 版本条：**必填/前提**信息，常驻在折叠头之前 —— 没有 frpc 什么都起不来，
+        // 新人收起高级区就再也看不到它装没装、什么版本，这正是第一次就卡住的地方。
+        h(FrpcVersionBar, { inst: st.frpcInstall, onDone: () => void loadState({ force: true }) }),
+
+        // ── 高级（默认收起）：只剩 DSH 网页入口那套（隧道 / 端口 / 访问密码）──
+        //
+        // 分工原则（真机反馈后重排）：
+        //   · **必填/前提**的信息不进折叠区（frpc 版本条已挪到上面常驻，安装引导与日志本来就在区外）；
+        //   · **可选**的 DSH 网页入口配置（② 隧道 / ③ 本机端口 / ④ 访问密码 / 保存）才收进去，
+        //     纯 SSH 用户根本不需要打开它。
         h('div', {},
           h('button', {
             type: 'button',
@@ -1639,14 +1648,11 @@ window.__ModuleLoader__.load({
             },
             'aria-expanded': advOpen,
             onClick: () => setAdvOpen((v) => { const next = !v; writeAdvOpenPref(next); return next }),
-          }, advOpen ? '收起高级设置' : '高级（DSH 隧道 / 端口 / 日志配置）'),
+          }, advOpen ? '收起高级设置' : '高级 · DSH 网页入口（可选：隧道 / 端口 / 访问密码）'),
           h('span', { style: { ...S.hint, marginLeft: '8px' } },
-            advOpen ? '这些是给 DSH 网页入口用的，纯 SSH 连入不需要动。' : ''),
+            advOpen ? '只影响 DSH 网页入口；纯 SSH 连入不需要动。frpc 状态/版本、安装引导和日志都在区外，收起也能看到。' : ''),
           advOpen
       ? h('div', { style: { display: 'flex', flexDirection: 'column', gap: '9px', marginTop: '9px' } },
-
-        // ── frpc 版本 + 手动检查更新（未安装/异常时自动隐藏）──
-        h(FrpcVersionBar, { inst: st.frpcInstall, onDone: () => void loadState({ force: true }) }),
 
         // ── 总开关 + 运行状态（原来三行标题，现在并成一行）──
         h('div', { style: S.row },
