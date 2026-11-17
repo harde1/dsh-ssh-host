@@ -18,7 +18,9 @@
 //     转发到自己那边），其余目标一律拒绝 —— 前端不是跳板机。
 
 import { spawn } from 'node:child_process'
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { connect as netConnect } from 'node:net'
+import { dirname } from 'node:path'
 import { generateHostKey } from './ssh.mjs'
 
 /** DSH Go 用它抓启动行：`grep -E 'https?://[^ ]*[?&]token='`（见 dsh-go remote_bootstrap）。 */
@@ -165,12 +167,34 @@ export function buildShimScript(realDshPath) {
 }
 
 /**
+ * 前端的 host key：**必须持久化**，不能每次启动现生成。
+ *
+ * 真机反馈（2026-11-17）：「主机指纹经常重置」。原因是前端每次 start 都 `generateHostKey()`
+ * 造一把新的 —— SSH 客户端把 host key 当身份做信任固定（DSH Go 的 SshHostConfig 里就有
+ * hostKeyType/hostKeyFingerprint，Termius 同理），指纹一变就要重新确认，看起来像「又重置了」。
+ * 现在落盘到 ~/.dsh/dsh-ssh-host/ssh-front-host-key（0600），模式开关怎么切都是同一把。
+ */
+export function loadOrCreateFrontHostKey(file) {
+  try {
+    const text = readFileSync(file, 'utf8')
+    if (text.includes('OPENSSH PRIVATE KEY')) return text
+  } catch { /* 没有就生成 */ }
+  const gen = generateHostKey()
+  mkdirSync(dirname(file), { recursive: true })
+  writeFileSync(file, gen.privateKey, { mode: 0o600 })
+  return gen.privateKey
+}
+
+/**
  * 启动 SSH 前端。
  *
  * @param {object} opts
  * @param {string} opts.publicKeyLine 插件公钥行（`ssh-ed25519 AAAA… dsh-ssh-host`）
  * @param {string} opts.attachLine    DSH Go 要抓的启动行
  * @param {string} opts.shimDir      垫片目录（里面必须有可执行的 `dsh`）
+ * @param {string} [opts.hostKey]    前端的 host key（OpenSSH authkey 文本）。生产必须传
+ *                                  持久化的那把（见 loadOrCreateFrontHostKey），否则每次启动
+ *                                  换身份，客户端会以为指纹被重置；不传则内存现生成（测试用）。
  * @param {number} [opts.desktopPort] 允许 direct-tcpip 转发到的本机端口
  * @param {number} [opts.port]        监听端口（0 = 随机，默认 0）
  * @param {string} [opts.host]        监听地址（默认 127.0.0.1，不给外网留口）
@@ -185,6 +209,7 @@ export async function startSshFront({
   desktopPort = 0,
   host = '127.0.0.1',
   port = 0,
+  hostKey = null,
   onAttach = () => {},
   log = () => {},
 } = {}) {
@@ -199,13 +224,13 @@ export async function startSshFront({
   const Server = ssh2.Server ?? ssh2.default?.Server
   // 前端自己的 host key：每次启动内存生成一把（OpenSSH authkey 文本），不落盘 ——
   // 它只服务这一条隧道的会话。复用 ssh.mjs 的编码器，避免依赖 ssh2 对 PEM 的支持范围。
-  const hostKey = generateHostKey()
+  const serverHostKey = hostKey ?? generateHostKey().privateKey
 
   // 记下每条连接：close() 时要主动断开，否则 server.close() 会一直等现有连接结束
   // （测试里最典型：垫片 `exec sleep 86400` 保活，连接不断，close() 永不 resolve）。
   const connections = new Set()
 
-  const server = new Server({ hostKeys: [hostKey.privateKey] }, (client) => {
+  const server = new Server({ hostKeys: [serverHostKey] }, (client) => {
     connections.add(client)
     client.on('close', () => connections.delete(client))
     client.on('authentication', (ctx) => {

@@ -7,7 +7,7 @@
 //   · 服务端：错误密钥被拒、正确密钥可 exec、`dsh desktop` 经 PATH 垫片打印启动行
 //     且保活、交互 shell 明确拒绝、direct-tcpip 只放行 DSH 端口。
 
-import { mkdtempSync, writeFileSync, chmodSync } from 'node:fs'
+import { mkdtempSync, writeFileSync, chmodSync, statSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createServer } from 'node:net'
@@ -15,6 +15,7 @@ import { generateHostKey } from '../ssh.mjs'
 import {
   parseEd25519PublicKeyLine, rawEd25519FromKeyData, sameEd25519Key,
   buildAttachLine, wantsDesktop, buildShimScript, withShimPath, rewriteAttachRequest, startSshFront,
+  loadOrCreateFrontHostKey,
 } from '../ssh-front.mjs'
 
 const results = []
@@ -92,6 +93,23 @@ const skip = (n, why) => { results.push(true); console.log(`SKIP  ${n} — ${why
       rewriteAttachRequest({ url: '/api/x', cookie: 'a=1; dsh-auth-ABC=1' }, opt).action === 'proxy')
     rec('外壳判定：既没票也没会话 → 拒绝',
       rewriteAttachRequest({ url: '/', cookie: 'mine=1' }, opt).action === 'deny')
+  }
+
+  // 真机反馈（2026-11-17）：「主机指纹经常重置」。旧实现每次 start 都现生成 host key，
+  // 客户端把 host key 当身份做信任固定，指纹一变就要重新确认。这里钉住「持久化后不变」。
+  {
+    const dir = mkdtempSync(join(tmpdir(), 'dsh-ssh-front-hk-'))
+    const file = join(dir, 'ssh-front-host-key')
+    const first = loadOrCreateFrontHostKey(file)
+    const second = loadOrCreateFrontHostKey(file)
+    rec('host key 持久化：两次加载同一文件得到同一把（指纹不再变）',
+      first === second && first.includes('OPENSSH PRIVATE KEY'))
+    rec('host key 持久化：落盘 0600（只有本用户可读）',
+      (statSync(file).mode & 0o777) === 0o600, `mode=${(statSync(file).mode & 0o777).toString(8)}`)
+    rec('host key 持久化：文件被写坏时重新生成而不是崩',
+      (writeFileSync(file, 'garbage', { mode: 0o600 }), loadOrCreateFrontHostKey(file).includes('OPENSSH PRIVATE KEY')))
+    rec('host key 持久化：不同安装目录是不同的身份（不会跨机共用）',
+      loadOrCreateFrontHostKey(join(dir, 'other')) !== readFileSync(file, 'utf8'))
   }
 
   const shim = buildShimScript('/usr/local/bin/dsh')

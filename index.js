@@ -22,7 +22,7 @@ import { createPasswordGate, createGateServer } from './gate.mjs'
 import { installFrpc, checkInstalled, fetchClients, pickAsset, extractSakuraVersion, compareFrpcVersion } from './installer.mjs'
 import { resolveDshHome, resolveFrpcPath, displayPath } from './paths.mjs'
 import { checkSshd, countSshSessions, generateHostKey, fingerprintOf as sshFingerprintOf, installPublicKey, buildConnectCommand, SSHD_PORT, toOpenSshPrivatePem, publicKeyFromPrivatePem } from './ssh.mjs'
-import { buildAttachLine, buildShimScript, rewriteAttachRequest, startSshFront } from './ssh-front.mjs'
+import { buildAttachLine, buildShimScript, loadOrCreateFrontHostKey, rewriteAttachRequest, startSshFront } from './ssh-front.mjs'
 
 export const name = 'sshhost'
 export const inject = ['credentials', 'webServer', 'timer', 'connection']
@@ -208,6 +208,7 @@ export function apply(ctx, config = {}) {
   let attachBridge = null      // 「dsh web 外壳」：DSH Go 以为在连 dsh web，实际是我们的门 → 桌面版
   let attachBridgePort = null  // 外壳端口（= DSH Go 启动链接里的端口）
   let attachTicket = ''        // 外壳的一次性口令（DSH Go 用 ?token= 来换 cookie）
+  let sshFrontHostKey = ''     // 前端的 host key（持久化，指纹稳定）
   let sshFrontPort = null      // 前端监听端口 = 隧道 local_port（开启时）
   let dshGoAttachedAt = 0      // 最近一次收到 desktop 启动请求的时间
   let dshGoAttachCount = 0
@@ -660,7 +661,12 @@ export function apply(ctx, config = {}) {
     } catch { /* 下面按失败处理 */ }
     if (!keyLine) return { ok: false, error: 'no-key' }
     try {
+      // host key 必须持久化：每次现生成会换 SSH 身份，客户端把 host key 当信任锚，
+      // 指纹一变就得重新确认 —— 用户看到的就是「主机指纹经常重置」。
+      const frontHostKey = loadOrCreateFrontHostKey(join(DATA_DIR, 'ssh-front-host-key'))
+      sshFrontHostKey = frontHostKey
       sshFront = await startSshFront({
+        hostKey: frontHostKey,
         publicKeyLine: keyLine.trim(),
         attachLine,
         shimDir: ensureShim(),
@@ -1910,6 +1916,14 @@ export function apply(ctx, config = {}) {
           port: sshFrontPort,
           attachedAt: dshGoAttachedAt,
           attachCount: dshGoAttachCount,
+          // 前端 host key 的指纹：持久化后应当**始终不变**，客户端认的就是它。
+          // 顺手展示出来，用户下次觉得「又重置了」可以直接比对。
+          hostFingerprint: (() => {
+            try {
+              const pub = sshFrontHostKey ? publicKeyFromPrivatePem(sshFrontHostKey) : null
+              return pub ? sshFingerprintOf(pub) : null
+            } catch { return null }
+          })(),
         },
       })
       return true

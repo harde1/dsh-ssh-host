@@ -23,7 +23,7 @@ frpc 日志都常驻在主界面 —— 没有 frpc 什么都起不来,新人收
 > macOS。请自行审阅源码后再使用;涉及安全敏感场景时请格外谨慎。
 > 代码按 MIT「按原样(AS IS)」提供,不附带任何担保,风险自负。
 >
-> 与「AI 生成即不可靠」无关的部分:**测试是可复核的**。`npm test` 是 27 个套件、997 项
+> 与「AI 生成即不可靠」无关的部分:**测试是可复核的**。`npm test` 是 27 个套件、1001 项
 > 全离线的断言(不连 SakuraFrp、不需要访问密钥、不写任何用户目录),其中
 > `admin-auth-test.mjs` 专门覆盖网关鉴权(7 种路径花招、WS 同权、改密后旧 cookie 失效),
 > `ssh-host-test.mjs` 覆盖 SSH 主机能力与路由(135 项,含用系统 `ssh-keygen` 反推公钥来
@@ -112,8 +112,9 @@ SSH 中心卡按「还缺什么」只显示当前那一步,你不需要往下找
 **打开期间的代价(面板上会写)**:Termius 连这条隧道会被前端拒绝——交互 shell 会明确回一句
 「请连原来的 SSH 隧道(端口 22)」。要用终端就关掉这个开关,隧道立刻回到 22。
 
-**安全边界**:前端只监听回环、host key 每次启动内存生成、`direct-tcpip` 只放行 DSH 端口;
-认证仍然只用插件生成的那把密钥,没有第二套凭据。
+**安全边界**:前端只监听回环、`direct-tcpip` 只放行 DSH 端口;认证仍然只用插件生成的那把
+密钥,没有第二套凭据。前端的 **host key 持久化**在 `~/.dsh/dsh-ssh-host/ssh-front-host-key`(0600)
+—— 开关怎么切都是同一把,客户端(DSH Go / Termius)不会每次都被要求重新确认主机指纹。
 
 手机端:Termius → Keychain → + → Import,把卡上「私钥 → 导入手机(Termius)」里整段
 (含 BEGIN/END 行)粘贴保存,主机认证选这把钥匙,连上面那条命令即可。
@@ -345,7 +346,7 @@ time curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:<端口>/ssh-host
 也是拿一个临时 `DSH_HOME` 跑冷启动)。
 
 ```bash
-npm test                 # 27 个套件、997 项,串行跑并汇总
+npm test                 # 27 个套件、1001 项,串行跑并汇总
 # npm test 会核对 README 的套件表与总数：文档数字一过期,测试直接红
 npm test -- path         # 只跑名字含关键字的套件
 ```
@@ -359,7 +360,7 @@ npm test -- path         # 只跑名字含关键字的套件
 
 | 套件 | 项 | 覆盖 |
 |---|---|---|
-| `ssh-front-test.mjs` | 25 | 「对接 DSH Go」的 SSH 前端(**本机 loopback 起真 ssh2 握手**)：公钥逐字节授权 / 错误密钥被拒 / `dsh desktop` 经 PATH 垫片打印启动行并保活 / 交互 shell 明确拒绝 / direct-tcpip 只放行 DSH 端口 |
+| `ssh-front-test.mjs` | 29 | 「对接 DSH Go」的 SSH 前端(**本机 loopback 起真 ssh2 握手**)：公钥逐字节授权 / 错误密钥被拒 / `dsh desktop` 经 PATH 垫片打印启动行并保活 / 交互 shell 明确拒绝 / direct-tcpip 只放行 DSH 端口 |
 | `ssh-host-test.mjs` | 142 | SSH 主机能力:ed25519 密钥(**用系统 `ssh-keygen -y` 反推公钥来判封装是否合法**)/ authorized_keys upsert / 连接命令 / sshd 探测注入点 / SSH 路由 / 旧 PKCS8 私钥自愈 / 节点三级回退 / 建隧道自动开启通道 / frpc 多隧道(NATFRP_TARGET) |
 | `order-test.mjs` | 126 | 解锁顺序、表单排布、按钮文案与出现条件、SSH 中心卡契约(复制回退 / 深链分支 / 区内不出现口令字样 / **自动生成密钥与自动建隧道的触发条件、只试一次与「重试」出口**)、「高级」区折叠边界(遗留项确实在区内、日志与安装引导确实在区外) |
 | `paths-test.mjs` | 51 | frpc / DSH home 路径解析(含 `$DSH_HOME` 空白、`PROFILE_DIR` 反推) |
